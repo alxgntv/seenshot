@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SeenShot</title>
+  <meta name="description" content="SeenShot for Mac. Download the latest release.">
+  <link rel="icon" href="SeenShot.png">
+  <style>
+    :root {
+      --blue: #2f5bff;
+      --ink: #14141c;
+      --paper: #f6efe2;
+      --pink: #ff4d9a;
+      --yellow: #ffd23f;
+      --orange: #ff7a1a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", sans-serif;
+      background: var(--blue);
+      color: var(--paper);
+    }
+    main {
+      width: min(720px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 48px 0 80px;
+    }
+    .hero {
+      text-align: center;
+    }
+    .hero img {
+      width: 180px;
+      height: 180px;
+      object-fit: cover;
+      border-radius: 36px;
+      border: 4px solid #111;
+      box-shadow: 8px 8px 0 #111;
+      background: var(--blue);
+    }
+    h1 {
+      margin: 28px 0 8px;
+      font-size: clamp(42px, 8vw, 64px);
+      letter-spacing: -0.04em;
+      line-height: 0.9;
+    }
+    h1 span { color: var(--yellow); }
+    .lede {
+      margin: 0 0 28px;
+      font-size: 18px;
+      opacity: 0.92;
+    }
+    .download {
+      display: inline-block;
+      padding: 14px 22px;
+      border-radius: 999px;
+      border: 4px solid #111;
+      background: var(--yellow);
+      color: #111;
+      font-weight: 800;
+      font-size: 16px;
+      text-decoration: none;
+      box-shadow: 5px 5px 0 #111;
+    }
+    .download:hover { transform: translate(-1px, -1px); }
+    .meta {
+      margin: 14px 0 0;
+      font-size: 13px;
+      opacity: 0.85;
+    }
+    h2 {
+      margin: 56px 0 16px;
+      font-size: 22px;
+    }
+    .release {
+      margin: 0 0 12px;
+      padding: 16px 18px;
+      border: 4px solid #111;
+      border-radius: 18px;
+      background: #2448d6;
+      box-shadow: 5px 5px 0 #111;
+    }
+    .release-top {
+      display: flex;
+      gap: 12px;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .release a {
+      color: var(--yellow);
+      font-weight: 700;
+    }
+    .notes {
+      margin: 10px 0 0;
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.45;
+      opacity: 0.9;
+    }
+    .error, .empty {
+      padding: 16px 18px;
+      border: 4px solid #111;
+      border-radius: 18px;
+      background: #1d3bb8;
+    }
+    .error a, .empty a { color: var(--yellow); }
+  </style>
+</head>
+<body>
+  <!-- ─── Ariadne's Thread [AT-0133] ─────────────────────
+    What: GitHub Pages microsite that lists official GitHub Releases
+    Why:  /docs is the existing Pages source; appcast.xml must stay here
+    Date: 2026-08-26
+    Related: docs/appcast.xml, https://docs.github.com/en/rest/releases/releases
+  ─────────────────────────────────────────────────────── -->
+  <main>
+    <section class="hero">
+      <img src="SeenShot.png" alt="SeenShot">
+      <h1>Seen<span>Shot</span></h1>
+      <p class="lede">Screenshot annotation for Mac. Apple Silicon, macOS 14+.</p>
+      <a id="latest-download" class="download" href="https://github.com/alxgntv/seenshot/releases">Download</a>
+      <p id="latest-meta" class="meta">Loading releases…</p>
+    </section>
+    <h2>Releases</h2>
+    <div id="releases"></div>
+  </main>
+  <script>
+    const REPO = "alxgntv/seenshot";
+    const RELEASES_URL = "https://api.github.com/repos/" + REPO + "/releases";
+    const FALLBACK = "https://github.com/" + REPO + "/releases";
+
+    function zipAsset(release) {
+      const assets = Array.isArray(release.assets) ? release.assets : [];
+      return assets.find(function (asset) {
+        return typeof asset.name === "string" && asset.name.indexOf(".zip") !== -1;
+      }) || null;
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) {
+        return "";
+      }
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function formatDate(iso) {
+      if (!iso) {
+        return "";
+      }
+      return new Date(iso).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric"
+      });
+    }
+
+    function render(releases) {
+      const published = releases.filter(function (release) {
+        return !release.draft;
+      });
+      console.log("SeenShot site: published releases=" + published.length);
+      const list = document.getElementById("releases");
+      const latestLink = document.getElementById("latest-download");
+      const latestMeta = document.getElementById("latest-meta");
+      if (published.length === 0) {
+        list.innerHTML = '<p class="empty">No published releases yet. See <a href="' + FALLBACK + '">GitHub Releases</a>.</p>';
+        latestMeta.textContent = "No published release yet.";
+        return;
+      }
+      const latest = published[0];
+      const latestZip = zipAsset(latest);
+      const version = latest.tag_name || latest.name || "latest";
+      if (latestZip && latestZip.browser_download_url) {
+        latestLink.href = latestZip.browser_download_url;
+        latestLink.textContent = "Download " + version;
+        latestMeta.textContent = (latestZip.name || "zip") + " · " + formatBytes(latestZip.size);
+        console.log("SeenShot site: latest zip=" + latestZip.browser_download_url);
+      } else {
+        latestLink.href = latest.html_url || FALLBACK;
+        latestLink.textContent = "Open " + version;
+        latestMeta.textContent = "No zip asset on this release.";
+        console.warn("SeenShot site: latest release has no zip asset tag=" + version);
+      }
+      list.innerHTML = "";
+      published.forEach(function (release) {
+        const zip = zipAsset(release);
+        const item = document.createElement("article");
+        item.className = "release";
+        const tag = release.tag_name || release.name || "release";
+        const date = formatDate(release.published_at);
+        const badge = release.prerelease ? " · Pre-release" : "";
+        const href = zip && zip.browser_download_url ? zip.browser_download_url : (release.html_url || FALLBACK);
+        const label = zip ? "Download " + (zip.name || "zip") : "Open on GitHub";
+        const size = zip ? " · " + formatBytes(zip.size) : "";
+        item.innerHTML =
+          '<div class="release-top"><strong>' + tag + badge + "</strong><span>" + date + size + "</span></div>" +
+          '<a href="' + href + '">' + label + "</a>" +
+          (release.body ? '<p class="notes"></p>' : "");
+        if (release.body) {
+          item.querySelector(".notes").textContent = release.body;
+        }
+        list.appendChild(item);
+      });
+    }
+
+    function showError(message) {
+      console.error("SeenShot site: " + message);
+      document.getElementById("latest-meta").textContent = "Could not load releases.";
+      document.getElementById("releases").innerHTML =
+        '<p class="error">' + message + ' <a href="' + FALLBACK + '">GitHub Releases</a></p>';
+    }
+
+    fetch(RELEASES_URL, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+      }
+    }).then(function (response) {
+      console.log("SeenShot site: GitHub releases status=" + response.status);
+      if (!response.ok) {
+        throw new Error("GitHub Releases HTTP " + response.status);
+      }
+      return response.json();
+    }).then(function (data) {
+      if (!Array.isArray(data)) {
+        throw new Error("GitHub Releases payload is not an array");
+      }
+      render(data);
+    }).catch(function (error) {
+      showError(error && error.message ? error.message : "GitHub Releases request failed.");
+    });
+  </script>
+</body>
+</html>
