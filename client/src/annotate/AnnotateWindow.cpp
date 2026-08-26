@@ -35,6 +35,7 @@
 #include <QLinearGradient>
 #include <QSize>
 #include <QDebug>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFrame>
 #include <QJsonArray>
@@ -325,18 +326,28 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
                  &AnnotateWindow::setToolLine);
     addCheckable(m_textToolAction, QStringLiteral("textformat"), QStringLiteral("Text"),
                  &AnnotateWindow::setToolText);
+    // ─── Ariadne's Thread [AT-0132] ─────────────────────
+    // What: Put a Blur QLabel to the left of the Blur tool icon
+    // Why:  Same label+control pattern as Color / Background
+    // Date: 2026-08-26
+    // Related: [AT-0063] AnnotateWindow.cpp, [AT-0071] AnnotateWindow.cpp
+    // ─────────────────────────────────────────────────────
+    auto *blurLabel = new QLabel(QStringLiteral("Blur"));
+    toolbar->addWidget(blurLabel);
     addCheckable(m_blurAction, QStringLiteral("circle.lefthalf.filled"), QStringLiteral("Blur"),
                  &AnnotateWindow::setToolBlur);
-    // ─── Ariadne's Thread [AT-0075] ─────────────────────
-    // What: Photo is QToolButton MenuButtonPopup: click = preview then QToolButton::showMenu
-    // Why:  Auto 3-2-1 hid the pose; capture is now an explicit menu action
-    // Date: 2026-08-25
-    // Related: [AT-0068] AnnotateWindow.cpp:layoutPhotoOverlay, docs/PRD-03-photo-cutout.md
+    qInfo() << "AnnotateWindow: Blur label added left of tool icon";
+    // ─── Ariadne's Thread [AT-0127] ─────────────────────
+    // What: Photo toolbar button is checkable: press on opens pip, press off stops camera
+    // Why:  MenuButtonPopup second click opened Picture/5s and could not turn the pip off
+    // Date: 2026-08-26
+    // Related: [AT-0075] AnnotateWindow.cpp, docs/PRD-03-photo-cutout.md
     // ─────────────────────────────────────────────────────
     m_photoButton = new QToolButton(toolbar);
     m_photoButton->setIcon(macToolbarIcon(QStringLiteral("camera")));
     m_photoButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
     m_photoButton->setPopupMode(QToolButton::MenuButtonPopup);
+    m_photoButton->setCheckable(true);
     m_photoButton->setFocusPolicy(Qt::NoFocus);
     m_photoButton->setToolTip(QStringLiteral("Photo"));
     m_photoButton->setAccessibleName(QStringLiteral("Photo"));
@@ -344,9 +355,9 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     photoMenu->addAction(QStringLiteral("Picture"), this, &AnnotateWindow::startPhotoPicture);
     photoMenu->addAction(QStringLiteral("5s timer"), this, &AnnotateWindow::startPhotoTimer5);
     m_photoButton->setMenu(photoMenu);
-    connect(m_photoButton, &QToolButton::clicked, this, &AnnotateWindow::startPhotoPreview);
+    connect(m_photoButton, &QToolButton::clicked, this, &AnnotateWindow::togglePhotoPreview);
     toolbar->addWidget(m_photoButton);
-    qInfo() << "AnnotateWindow: Photo MenuButtonPopup iconNull=" << m_photoButton->icon().isNull();
+    qInfo() << "AnnotateWindow: Photo checkable MenuButtonPopup iconNull=" << m_photoButton->icon().isNull();
     m_highlightAction->setChecked(true);
     toolbar->addSeparator();
     m_undoAction = toolbar->addAction(macToolbarIcon(QStringLiteral("arrow.uturn.backward")),
@@ -413,7 +424,6 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     // ─────────────────────────────────────────────────────
     m_bgButton = new QToolButton(toolbar);
     m_bgButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_bgButton->setPopupMode(QToolButton::InstantPopup);
     m_bgButton->setFocusPolicy(Qt::NoFocus);
     m_bgButton->setToolTip(QStringLiteral("Background"));
     m_bgButton->setAccessibleName(QStringLiteral("Background"));
@@ -456,7 +466,22 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     auto *bgWidgetAction = new QWidgetAction(bgMenu);
     bgWidgetAction->setDefaultWidget(bgRow);
     bgMenu->addAction(bgWidgetAction);
-    m_bgButton->setMenu(bgMenu);
+    // ─── Ariadne's Thread [AT-0131] ─────────────────────
+    // What: Open the Background menu with QMenu::popup, not QToolButton::setMenu
+    // Why:  InstantPopup paints a down chevron over the circle on macOS
+    // Date: 2026-08-26
+    // Related: [AT-0073] AnnotateWindow.cpp, docs/PRD-02-annotate-tools.md
+    // ─────────────────────────────────────────────────────
+    connect(m_bgButton, &QToolButton::clicked, this, [this, bgMenu]() {
+        if (!m_bgButton || !bgMenu) {
+            qWarning() << "AnnotateWindow: Background menu missing on click";
+            return;
+        }
+        const QPoint pos = m_bgButton->mapToGlobal(QPoint(0, m_bgButton->height()));
+        qInfo() << "AnnotateWindow: Background menu popup at" << pos;
+        bgMenu->popup(pos);
+    });
+    qInfo() << "AnnotateWindow: Background menu has no tool-button indicator";
     m_bgPreset = 0;
     m_bgButton->setIcon(backgroundCircleIcon(0));
     if (QAction *none = m_bgGroup->actions().value(0)) {
@@ -514,9 +539,13 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     // ─────────────────────────────────────────────────────
     m_photoOverlay = new QWidget(this, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
     m_photoOverlay->setAttribute(Qt::WA_ShowWithoutActivating);
+    m_photoOverlay->setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     m_photoOverlay->setAttribute(Qt::WA_TranslucentBackground);
     m_photoOverlay->setAttribute(Qt::WA_QuitOnClose, false);
     m_photoOverlay->setAutoFillBackground(false);
+    m_photoOverlay->setMouseTracking(true);
+    m_photoOverlay->setCursor(Qt::OpenHandCursor);
+    m_photoOverlay->installEventFilter(this);
     m_photoOverlay->hide();
     m_photoCountdown = new QLabel(m_photoOverlay);
     m_photoCountdown->setAlignment(Qt::AlignCenter);
@@ -1280,10 +1309,20 @@ void AnnotateWindow::applyCanvasChrome()
 // Date: 2026-08-25
 // Related: [AT-0068] AnnotateWindow.cpp:layoutPhotoOverlay, [AT-0079] CameraCapture.mm
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0128] ─────────────────────
+// What: Keep the live pip on shotRect and honor a user drag position
+// Why:  Fixed bottom-right Tool window was easy to lose and could not be moved
+// Date: 2026-08-26
+// Related: [AT-0126] MacPermissions.mm:pinFloatingToolWindow, [AT-0080] AnnotateWindow.cpp
+// ─────────────────────────────────────────────────────
 void AnnotateWindow::layoutPhotoOverlay()
 {
     if (!m_photoOverlay || !m_view || !m_view->viewport()) {
         qWarning() << "AnnotateWindow: layoutPhotoOverlay missing view";
+        return;
+    }
+    if (m_photoPipDragging) {
+        qInfo() << "AnnotateWindow: layoutPhotoOverlay skipped during pip drag";
         return;
     }
     QWidget *viewport = m_view->viewport();
@@ -1292,12 +1331,31 @@ void AnnotateWindow::layoutPhotoOverlay()
     const int pipW = qBound(180, qRound(qMin(shotVp.width(), vp.width()) * 0.36), 360);
     const int pipH = qRound(pipW * 3.0 / 4.0);
     const int margin = 8;
-    const QPoint br = shotVp.bottomRight();
-    QRect pip(br.x() - pipW - margin, br.y() - pipH - margin, pipW, pipH);
-    pip.moveLeft(qBound(vp.left() + margin, pip.left(), vp.right() - pip.width() - margin));
-    pip.moveTop(qBound(vp.top() + margin, pip.top(), vp.bottom() - pip.height() - margin));
+    QRect pip(0, 0, pipW, pipH);
+    if (m_photoPipUserMoved) {
+        const QPoint topLeft = m_view->mapFromScene(m_photoPipSceneTopLeft);
+        pip.moveTopLeft(topLeft);
+        qInfo() << "AnnotateWindow: photo pip restore scene=" << m_photoPipSceneTopLeft << " local=" << topLeft;
+    } else {
+        const QPoint br = shotVp.bottomRight();
+        pip.moveTopLeft(QPoint(br.x() - pipW - margin, br.y() - pipH - margin));
+    }
+    const QRect limit = photoPipClampRect();
+    if (pip.width() >= limit.width()) {
+        pip.moveLeft(limit.left());
+    } else {
+        pip.moveLeft(qBound(limit.left(), pip.left(), limit.right() - pip.width() + 1));
+    }
+    if (pip.height() >= limit.height()) {
+        pip.moveTop(limit.top());
+    } else {
+        pip.moveTop(qBound(limit.top(), pip.top(), limit.bottom() - pip.height() + 1));
+    }
     const QRect globalPip(viewport->mapToGlobal(pip.topLeft()), pip.size());
     m_photoOverlay->setGeometry(globalPip);
+    if (m_photoOverlay->isVisible()) {
+        MacPermissions::pinFloatingToolWindow(m_photoOverlay);
+    }
     if (m_photoCountdown) {
         m_photoCountdown->setGeometry(m_photoOverlay->rect());
         m_photoCountdown->raise();
@@ -1309,7 +1367,90 @@ void AnnotateWindow::layoutPhotoOverlay()
         m_camera->syncPreviewLayer();
     }
     qInfo() << "AnnotateWindow: photo pip local=" << pip << "global=" << globalPip << "shotVp=" << shotVp
-            << "viewport=" << vp << "visible=" << m_photoOverlay->isVisible();
+            << "viewport=" << vp << "visible=" << m_photoOverlay->isVisible()
+            << " userMoved=" << m_photoPipUserMoved;
+}
+
+QRect AnnotateWindow::photoPipClampRect() const
+{
+    if (!m_view || !m_view->viewport()) {
+        qWarning() << "AnnotateWindow: photoPipClampRect missing view";
+        return QRect();
+    }
+    const QRect vp = m_view->viewport()->rect();
+    const QRect shotVp = m_view->mapFromScene(shotRect()).boundingRect();
+    const QRect limit = shotVp.intersected(vp);
+    qInfo() << "AnnotateWindow: photo pip clamp=" << limit << " shotVp=" << shotVp << " vp=" << vp;
+    return limit;
+}
+
+void AnnotateWindow::movePhotoOverlayToGlobal(const QPoint &globalTopLeft)
+{
+    if (!m_photoOverlay || !m_view || !m_view->viewport()) {
+        qWarning() << "AnnotateWindow: movePhotoOverlayToGlobal missing overlay";
+        return;
+    }
+    QWidget *viewport = m_view->viewport();
+    const QSize size = m_photoOverlay->size();
+    const QRect limitLocal = photoPipClampRect();
+    const QRect limit(viewport->mapToGlobal(limitLocal.topLeft()), limitLocal.size());
+    QRect pip(globalTopLeft, size);
+    if (pip.width() >= limit.width()) {
+        pip.moveLeft(limit.left());
+    } else {
+        pip.moveLeft(qBound(limit.left(), pip.left(), limit.right() - pip.width() + 1));
+    }
+    if (pip.height() >= limit.height()) {
+        pip.moveTop(limit.top());
+    } else {
+        pip.moveTop(qBound(limit.top(), pip.top(), limit.bottom() - pip.height() + 1));
+    }
+    m_photoOverlay->setGeometry(pip);
+    persistPhotoPipScenePos();
+    if (m_camera && m_camera->isRunning()) {
+        m_camera->syncPreviewLayer();
+    }
+    qInfo() << "AnnotateWindow: photo pip dragged global=" << pip << " scene=" << m_photoPipSceneTopLeft;
+}
+
+void AnnotateWindow::persistPhotoPipScenePos()
+{
+    if (!m_photoOverlay || !m_view || !m_view->viewport()) {
+        qWarning() << "AnnotateWindow: persistPhotoPipScenePos missing overlay";
+        return;
+    }
+    const QPoint local = m_view->viewport()->mapFromGlobal(m_photoOverlay->frameGeometry().topLeft());
+    m_photoPipSceneTopLeft = m_view->mapToScene(local);
+    m_photoPipUserMoved = true;
+    qInfo() << "AnnotateWindow: photo pip persist scene=" << m_photoPipSceneTopLeft << " local=" << local;
+}
+
+void AnnotateWindow::syncPhotoButtonChecked()
+{
+    if (!m_photoButton) {
+        qWarning() << "AnnotateWindow: syncPhotoButtonChecked missing button";
+        return;
+    }
+    const bool on = m_photoCycle;
+    const QSignalBlocker blocker(m_photoButton);
+    m_photoButton->setChecked(on);
+    qInfo() << "AnnotateWindow: Photo button checked=" << on << " cycle=" << m_photoCycle;
+}
+
+void AnnotateWindow::setPhotoPipSelected(bool selected)
+{
+    if (m_photoPipSelected == selected) {
+        if (m_camera) {
+            m_camera->setPreviewSelected(selected);
+        }
+        qInfo() << "AnnotateWindow: photo pip selected unchanged=" << selected;
+        return;
+    }
+    m_photoPipSelected = selected;
+    qInfo() << "AnnotateWindow: photo pip selected=" << selected;
+    if (m_camera) {
+        m_camera->setPreviewSelected(selected);
+    }
 }
 
 // ─── Ariadne's Thread [AT-0061] ─────────────────────
@@ -1329,8 +1470,20 @@ bool AnnotateWindow::photoCaptureBusy() const
     return m_photoFlashPhase != PhotoFlash::Idle;
 }
 
-void AnnotateWindow::startPhotoPreview()
+void AnnotateWindow::togglePhotoPreview()
 {
+    qInfo() << "AnnotateWindow: toggle Photo cycle=" << m_photoCycle
+            << " flashBusy=" << photoCaptureBusy()
+            << " buttonChecked=" << (m_photoButton && m_photoButton->isChecked());
+    if (photoCaptureBusy()) {
+        qInfo() << "AnnotateWindow: Photo toggle ignored during flash";
+        syncPhotoButtonChecked();
+        return;
+    }
+    if (m_photoCycle) {
+        abortPhotoCycle();
+        return;
+    }
     startPhotoWithFollow(PhotoFollow::PreviewOnly);
 }
 
@@ -1354,14 +1507,20 @@ void AnnotateWindow::startPhotoWithFollow(PhotoFollow follow)
     }
     m_photoFollow = follow;
     qInfo() << "AnnotateWindow: Photo follow=" << static_cast<int>(follow);
-    if (m_photoCycle && m_camera && m_camera->isRunning()) {
-        QTimer::singleShot(0, this, [this]() {
-            if (!photoCaptureBusy()) {
-                runPhotoFollow();
-            }
-        });
+    if (m_photoCycle) {
+        if (m_camera && m_camera->isRunning()) {
+            QTimer::singleShot(0, this, [this]() {
+                if (!photoCaptureBusy()) {
+                    runPhotoFollow();
+                }
+            });
+            return;
+        }
+        qInfo() << "AnnotateWindow: Photo follow stored while camera pending";
         return;
     }
+    m_photoCycle = true;
+    syncPhotoButtonChecked();
     const int token = m_photoToken;
     MacPermissions::requestCamera([this, token](bool granted) {
         if (token != m_photoToken) {
@@ -1373,6 +1532,8 @@ void AnnotateWindow::startPhotoWithFollow(PhotoFollow follow)
             statusBar()->showMessage(ErrorCatalog::message(QStringLiteral("CAMERA_DENIED")));
             MacPermissions::openCameraSettings();
             m_photoFollow = PhotoFollow::None;
+            m_photoCycle = false;
+            syncPhotoButtonChecked();
             return;
         }
         QPointer<AnnotateWindow> alive(this);
@@ -1388,6 +1549,7 @@ void AnnotateWindow::startPhotoWithFollow(PhotoFollow follow)
             }
             if (!alive->ensurePhotoPreview()) {
                 alive->m_photoFollow = PhotoFollow::None;
+                alive->syncPhotoButtonChecked();
                 return;
             }
             alive->runPhotoFollow();
@@ -1405,6 +1567,7 @@ bool AnnotateWindow::ensurePhotoPreview()
     if (m_photoCycle && m_camera->isRunning()) {
         qInfo() << "AnnotateWindow: preview already running";
         layoutPhotoOverlay();
+        syncPhotoButtonChecked();
         return true;
     }
     m_photoCycle = true;
@@ -1425,6 +1588,8 @@ bool AnnotateWindow::ensurePhotoPreview()
         return false;
     }
     layoutPhotoOverlay();
+    setPhotoPipSelected(true);
+    syncPhotoButtonChecked();
     qInfo() << "AnnotateWindow: preview shown pip=" << m_photoOverlay->geometry()
             << " topLevel=" << m_photoOverlay->isWindow();
     return true;
@@ -1436,7 +1601,7 @@ void AnnotateWindow::runPhotoFollow()
     m_photoFollow = PhotoFollow::None;
     qInfo() << "AnnotateWindow: runPhotoFollow" << static_cast<int>(follow);
     if (follow == PhotoFollow::PreviewOnly) {
-        showPhotoCaptureMenu();
+        qInfo() << "AnnotateWindow: preview only, menu stays on the Photo chevron";
         return;
     }
     if (follow == PhotoFollow::Picture) {
@@ -1617,6 +1782,14 @@ void AnnotateWindow::abortPhotoCycle(bool notifyEnded)
     m_photoFollow = PhotoFollow::None;
     m_photoFlashPhase = PhotoFlash::Idle;
     m_pendingStill = QImage();
+    m_photoPipUserMoved = false;
+    m_photoPipDragging = false;
+    if (m_photoOverlay && m_photoOverlay->mouseGrabber() == m_photoOverlay) {
+        m_photoOverlay->releaseMouse();
+        qInfo() << "AnnotateWindow: photo pip released mouse grab";
+    }
+    setPhotoPipSelected(false);
+    syncPhotoButtonChecked();
     if (running) {
         qInfo() << "AnnotateWindow: photo cycle aborted token=" << m_photoToken
                 << " notifyEnded=" << notifyEnded;
@@ -1980,6 +2153,9 @@ void AnnotateWindow::applySelectResize(const QPointF &scenePos)
         }
         rect->setRect(rect->mapRectFromScene(box));
         layoutHighlightChrome(rect);
+        if (highlightStyle(rect) == HighlightStyle::Steps) {
+            placeHighlightStepBadge(rect, shotRect(), clamped);
+        }
         qInfo() << "AnnotateWindow: select resize highlight" << box;
         return;
     }
@@ -2119,9 +2295,14 @@ void AnnotateWindow::commitSelectGesture()
 
 void AnnotateWindow::deleteSelectedAnnotation()
 {
-    if (m_editingText || m_photoCycle || m_selectItem) {
+    if (m_editingText || m_selectItem) {
         qInfo() << "AnnotateWindow: delete skipped edit=" << (m_editingText != nullptr)
-                << "photoCycle=" << m_photoCycle << "gesture=" << (m_selectItem != nullptr);
+                << "gesture=" << (m_selectItem != nullptr);
+        return;
+    }
+    if (m_photoPipSelected && m_photoCycle) {
+        qInfo() << "AnnotateWindow: delete turns off selected photo pip";
+        abortPhotoCycle();
         return;
     }
     QGraphicsItem *item = selectedAnnotation();
@@ -2166,15 +2347,75 @@ void AnnotateWindow::paintSelectHandles(QPainter *painter) const
     }
 }
 
+// ─── Ariadne's Thread [AT-0129] ─────────────────────
+// What: Drag / select the live pip; Delete and toolbar unpress turn the camera off
+// Why:  Pip was not a scene item, so it could not be found, moved, or deleted
+// Date: 2026-08-26
+// Related: [AT-0128] AnnotateWindow.cpp:layoutPhotoOverlay, [AT-0127] AnnotateWindow.cpp:togglePhotoPreview
+// ─────────────────────────────────────────────────────
+bool AnnotateWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched != m_photoOverlay || !m_photoOverlay || !m_photoCycle) {
+        return QMainWindow::eventFilter(watched, event);
+    }
+    if (photoCaptureBusy()) {
+        qInfo() << "AnnotateWindow: photo pip event ignored during flash type=" << event->type();
+        return QMainWindow::eventFilter(watched, event);
+    }
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() != Qt::LeftButton) {
+            return QMainWindow::eventFilter(watched, event);
+        }
+        setPhotoPipSelected(true);
+        m_photoPipDragging = true;
+        m_photoPipDragOffset = mouse->globalPosition().toPoint() - m_photoOverlay->frameGeometry().topLeft();
+        m_photoOverlay->setCursor(Qt::ClosedHandCursor);
+        m_photoOverlay->grabMouse();
+        qInfo() << "AnnotateWindow: photo pip press offset=" << m_photoPipDragOffset
+                << " geo=" << m_photoOverlay->geometry();
+        return true;
+    }
+    if (event->type() == QEvent::MouseMove && m_photoPipDragging) {
+        auto *mouse = static_cast<QMouseEvent *>(event);
+        movePhotoOverlayToGlobal(mouse->globalPosition().toPoint() - m_photoPipDragOffset);
+        return true;
+    }
+    if (event->type() == QEvent::MouseButtonRelease && m_photoPipDragging) {
+        auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() != Qt::LeftButton) {
+            return QMainWindow::eventFilter(watched, event);
+        }
+        m_photoPipDragging = false;
+        m_photoOverlay->releaseMouse();
+        m_photoOverlay->setCursor(Qt::OpenHandCursor);
+        persistPhotoPipScenePos();
+        qInfo() << "AnnotateWindow: photo pip drop scene=" << m_photoPipSceneTopLeft
+                << " geo=" << m_photoOverlay->geometry();
+        return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
 {
     if (event->button() != Qt::LeftButton) {
         qInfo() << "AnnotateWindow: viewPress ignore non-left";
         return true;
     }
-    if (m_photoCycle) {
-        qInfo() << "AnnotateWindow: viewPress ignored during photo cycle";
+    // ─── Ariadne's Thread [AT-0130] ─────────────────────
+    // What: Keep annotate tools active while the live camera pip is on
+    // Why:  viewPress returned early for the whole photo cycle and blocked drawing
+    // Date: 2026-08-26
+    // Related: [AT-0127] AnnotateWindow.cpp:togglePhotoPreview, docs/PRD-03-photo-cutout.md
+    // ─────────────────────────────────────────────────────
+    if (photoCaptureBusy()) {
+        qInfo() << "AnnotateWindow: viewPress ignored during photo flash";
         return false;
+    }
+    if (m_photoPipSelected) {
+        qInfo() << "AnnotateWindow: viewPress deselects photo pip";
+        setPhotoPipSelected(false);
     }
     if (!isOnShot(scenePos)) {
         qInfo() << "AnnotateWindow: ignore press outside shot" << scenePos << "shot=" << shotRect();
@@ -2453,7 +2694,6 @@ void AnnotateWindow::onSceneMoved(const QPointF &pos)
 
 void AnnotateWindow::onSceneReleased(const QPointF &pos)
 {
-    Q_UNUSED(pos);
     if (m_tool == Tool::Text || !m_draft) {
         m_drawing = false;
         qInfo() << "AnnotateWindow: release without draft";
@@ -2487,9 +2727,10 @@ void AnnotateWindow::onSceneReleased(const QPointF &pos)
     const HighlightStyle style = (m_tool == Tool::Highlight) ? highlightStyle(item) : HighlightStyle::Fill;
     if (m_tool == Tool::Highlight && style == HighlightStyle::Steps) {
         if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(item)) {
-            attachHighlightStepBadge(rect, m_color, m_nextStepSeq, shotRect());
+            attachHighlightStepBadge(rect, m_color, m_nextStepSeq, shotRect(), pos);
             ++m_nextStepSeq;
-            qInfo() << "AnnotateWindow: highlight Steps seq assigned next=" << m_nextStepSeq;
+            qInfo() << "AnnotateWindow: highlight Steps seq assigned next=" << m_nextStepSeq
+                    << "cursor=" << pos;
         }
     }
     m_undo->push(new AddItemCommand(m_scene, item));

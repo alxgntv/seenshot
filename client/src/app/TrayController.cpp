@@ -3,7 +3,10 @@
 #include "app/MacIcons.h"
 #include "local/LocalStore.h"
 
+#include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+#include <QIcon>
 #include <QMenu>
 #include <QSystemTrayIcon>
 
@@ -16,9 +19,14 @@
 TrayController::TrayController(QObject *parent)
     : QObject(parent)
 {
-    const QIcon eye = macToolbarIcon(QStringLiteral("eye"));
-    qInfo() << "TrayController: eye icon null=" << eye.isNull();
-    m_tray = new QSystemTrayIcon(eye, this);
+    const QString icns = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Resources/SeenShot.icns"));
+    QIcon appIcon(icns);
+    if (appIcon.isNull()) {
+        appIcon = macToolbarIcon(QStringLiteral("eye"));
+        qWarning() << "TrayController: bundle icns missing, fallback eye icns=" << icns;
+    }
+    qInfo() << "TrayController: app icon null=" << appIcon.isNull() << "icns=" << icns;
+    m_tray = new QSystemTrayIcon(appIcon, this);
     auto *menu = new QMenu();
     m_fullScreenAction = menu->addAction(QStringLiteral("Full Screen Shot"), this,
                                          &TrayController::fullScreenCaptureRequested);

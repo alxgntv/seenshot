@@ -3,6 +3,7 @@
 #include "app/AccountSignInPanel.h"
 #include "auth/AuthSession.h"
 
+#include <QApplication>
 #include <QDebug>
 #include <QLabel>
 #include <QVBoxLayout>
@@ -23,6 +24,17 @@ SignInDialog::SignInDialog(AuthSession *auth, QWidget *parent)
     layout->addWidget(lead);
     m_panel = new AccountSignInPanel(auth, this);
     layout->addWidget(m_panel);
+    // ─── Ariadne's Thread [AT-0123] ─────────────────────
+    // What: Show the running app version on the Share sign-in modal
+    // Why:  Same build string as Settings
+    // Date: 2026-08-26
+    // Related: [AT-0122] SettingsWindow.cpp, client/src/main.cpp
+    // ─────────────────────────────────────────────────────
+    const QString version = QApplication::applicationVersion();
+    auto *versionLabel = new QLabel(QStringLiteral("Version %1").arg(version), this);
+    versionLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(versionLabel);
+    qInfo() << "SignInDialog: version label" << version;
     connect(auth, &AuthSession::sessionChanged, this, [this, auth]() {
         qInfo() << "SignInDialog: sessionChanged hasSession=" << auth->hasSession();
         if (auth->hasSession()) {

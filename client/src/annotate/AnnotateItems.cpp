@@ -153,63 +153,198 @@ void applyHighlightAppearance(QGraphicsRectItem *rect, const QColor &color, High
     }
 }
 
-void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int seq, const QRectF &shot)
+namespace {
+
+constexpr qreal kStepBadgeRadius = 14.0;
+
+bool stepBadgeFitsShot(const QGraphicsRectItem *rect, const QPointF &localCenter, const QRectF &shot)
 {
     if (!rect) {
-        qWarning() << "attachHighlightStepBadge: null rect";
-        return;
+        return false;
+    }
+    const QRectF local(localCenter.x() - kStepBadgeRadius, localCenter.y() - kStepBadgeRadius,
+                       kStepBadgeRadius * 2.0, kStepBadgeRadius * 2.0);
+    const QRectF sceneBadge = rect->mapRectToScene(local);
+    const bool ok = shot.contains(sceneBadge);
+    qInfo() << "stepBadgeFitsShot: local=" << localCenter << "scene=" << sceneBadge << "fit=" << ok;
+    return ok;
+}
+
+QPointF clampStepBadgeLocal(const QGraphicsRectItem *rect, QPointF localCenter, const QRectF &shot)
+{
+    if (!rect) {
+        qWarning() << "clampStepBadgeLocal: null rect";
+        return localCenter;
+    }
+    const QRectF local(localCenter.x() - kStepBadgeRadius, localCenter.y() - kStepBadgeRadius,
+                       kStepBadgeRadius * 2.0, kStepBadgeRadius * 2.0);
+    const QRectF sceneBadge = rect->mapRectToScene(local);
+    qreal dx = 0;
+    qreal dy = 0;
+    if (sceneBadge.left() < shot.left()) {
+        dx = shot.left() - sceneBadge.left();
+    }
+    if (sceneBadge.right() > shot.right()) {
+        dx = shot.right() - sceneBadge.right();
+    }
+    if (sceneBadge.top() < shot.top()) {
+        dy = shot.top() - sceneBadge.top();
+    }
+    if (sceneBadge.bottom() > shot.bottom()) {
+        dy = shot.bottom() - sceneBadge.bottom();
+    }
+    const QPointF clamped = localCenter + QPointF(dx, dy);
+    qInfo() << "clampStepBadgeLocal: from=" << localCenter << "to=" << clamped << "dx=" << dx << "dy=" << dy;
+    return clamped;
+}
+
+QPointF outsideStepBadgeCenter(const QRectF &box, int corner)
+{
+    switch (corner) {
+    case 0:
+        return box.topLeft() + QPointF(-kStepBadgeRadius, -kStepBadgeRadius);
+    case 1:
+        return QPointF(box.right(), box.top()) + QPointF(kStepBadgeRadius, -kStepBadgeRadius);
+    case 2:
+        return QPointF(box.left(), box.bottom()) + QPointF(-kStepBadgeRadius, kStepBadgeRadius);
+    default:
+        return box.bottomRight() + QPointF(kStepBadgeRadius, kStepBadgeRadius);
+    }
+}
+
+QPointF stepBoxCorner(const QRectF &box, int corner)
+{
+    switch (corner) {
+    case 0:
+        return box.topLeft();
+    case 1:
+        return QPointF(box.right(), box.top());
+    case 2:
+        return QPointF(box.left(), box.bottom());
+    default:
+        return box.bottomRight();
+    }
+}
+
+StepBadgeItem *ensureStepBadge(QGraphicsRectItem *rect, const QColor &color, int seq)
+{
+    if (!rect) {
+        qWarning() << "ensureStepBadge: null rect";
+        return nullptr;
     }
     rect->setData(kAnnotateRoleStepSeq, seq);
     for (QGraphicsItem *child : rect->childItems()) {
-        if (qgraphicsitem_cast<StepBadgeItem *>(child)) {
-            qInfo() << "attachHighlightStepBadge: badge already present seq=" << seq;
-            return;
+        if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+            badge->setData(kAnnotateRoleStepSeq, seq);
+            qInfo() << "ensureStepBadge: reuse seq=" << seq;
+            return badge;
         }
     }
+    auto *badge = new StepBadgeItem(seq, color);
+    badge->setParentItem(rect);
+    applyHighlightAppearance(rect, color, highlightStyle(rect));
+    qInfo() << "ensureStepBadge: created seq=" << seq;
+    return badge;
+}
+
+} // namespace
+
+// ─── Ariadne's Thread [AT-0134] ─────────────────────
+// What: Place the Steps badge after release, outside, corner touching corner
+// Why:  Live-under-cursor sat in the corner center and appeared while dragging
+// Date: 2026-08-26
+// Related: [AT-0041] AnnotateItems.h:StepBadgeItem, docs/PRD-02-annotate-tools.md
+// ─────────────────────────────────────────────────────
+void placeHighlightStepBadge(QGraphicsRectItem *rect, const QRectF &shot, const QPointF &cursorScene)
+{
+    if (!rect) {
+        qWarning() << "placeHighlightStepBadge: null rect";
+        return;
+    }
+    StepBadgeItem *badge = nullptr;
+    for (QGraphicsItem *child : rect->childItems()) {
+        badge = qgraphicsitem_cast<StepBadgeItem *>(child);
+        if (badge) {
+            break;
+        }
+    }
+    if (!badge) {
+        qWarning() << "placeHighlightStepBadge: no badge";
+        return;
+    }
     const QRectF box = rect->rect();
-    const QPointF candidates[] = {
-        box.topLeft() + QPointF(-14, -14),
-        QPointF(box.right(), box.top()) + QPointF(14, -14),
-        QPointF(box.left(), box.bottom()) + QPointF(-14, 14),
-        box.bottomRight() + QPointF(14, 14),
-    };
-    QPointF chosen = candidates[0];
+    int order[4] = {0, 1, 2, 3};
+    qreal dist[4];
+    for (int i = 0; i < 4; ++i) {
+        dist[i] = QLineF(rect->mapToScene(stepBoxCorner(box, i)), cursorScene).length();
+        qInfo() << "placeHighlightStepBadge: corner=" << i << "dist=" << dist[i];
+    }
+    std::sort(order, order + 4, [&](int a, int b) {
+        return dist[a] < dist[b];
+    });
+    QPointF chosen = outsideStepBadgeCenter(box, order[0]);
     bool fitted = false;
-    for (const QPointF &candidate : candidates) {
-        const QRectF local(candidate.x() - 14, candidate.y() - 14, 28, 28);
-        const QRectF sceneBadge = rect->mapRectToScene(local);
-        if (shot.contains(sceneBadge)) {
+    for (int i = 0; i < 4; ++i) {
+        const QPointF candidate = outsideStepBadgeCenter(box, order[i]);
+        if (stepBadgeFitsShot(rect, candidate, shot)) {
             chosen = candidate;
             fitted = true;
-            qInfo() << "attachHighlightStepBadge: outside corner fits" << candidate << sceneBadge;
+            qInfo() << "placeHighlightStepBadge: fit corner=" << order[i] << "center=" << candidate
+                    << "cursor=" << cursorScene;
             break;
         }
     }
     if (!fitted) {
-        QRectF local(chosen.x() - 14, chosen.y() - 14, 28, 28);
-        QRectF sceneBadge = rect->mapRectToScene(local);
-        qreal dx = 0;
-        qreal dy = 0;
-        if (sceneBadge.left() < shot.left()) {
-            dx = shot.left() - sceneBadge.left();
-        }
-        if (sceneBadge.right() > shot.right()) {
-            dx = shot.right() - sceneBadge.right();
-        }
-        if (sceneBadge.top() < shot.top()) {
-            dy = shot.top() - sceneBadge.top();
-        }
-        if (sceneBadge.bottom() > shot.bottom()) {
-            dy = shot.bottom() - sceneBadge.bottom();
-        }
-        chosen += QPointF(dx, dy);
-        qInfo() << "attachHighlightStepBadge: clamped to shot dx=" << dx << "dy=" << dy;
+        chosen = clampStepBadgeLocal(rect, chosen, shot);
+        qInfo() << "placeHighlightStepBadge: no outside corner fits, clamped=" << chosen
+                << "cursor=" << cursorScene;
     }
-    auto *badge = new StepBadgeItem(seq, color);
-    badge->setParentItem(rect);
     badge->setPos(chosen);
-    applyHighlightAppearance(rect, color, highlightStyle(rect));
-    qInfo() << "attachHighlightStepBadge: seq=" << seq << "pos=" << chosen << "outside square";
+    qInfo() << "placeHighlightStepBadge: pos=" << chosen << "box=" << box;
+}
+
+void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int seq, const QRectF &shot)
+{
+    if (!ensureStepBadge(rect, color, seq)) {
+        return;
+    }
+    const QRectF box = rect->rect();
+    const QPointF candidates[] = {
+        box.topLeft() + QPointF(-kStepBadgeRadius, -kStepBadgeRadius),
+        QPointF(box.right(), box.top()) + QPointF(kStepBadgeRadius, -kStepBadgeRadius),
+        QPointF(box.left(), box.bottom()) + QPointF(-kStepBadgeRadius, kStepBadgeRadius),
+        box.bottomRight() + QPointF(kStepBadgeRadius, kStepBadgeRadius),
+    };
+    QPointF chosen = candidates[0];
+    bool fitted = false;
+    for (const QPointF &candidate : candidates) {
+        if (stepBadgeFitsShot(rect, candidate, shot)) {
+            chosen = candidate;
+            fitted = true;
+            qInfo() << "attachHighlightStepBadge: restore corner fits" << candidate;
+            break;
+        }
+    }
+    if (!fitted) {
+        chosen = clampStepBadgeLocal(rect, chosen, shot);
+    }
+    for (QGraphicsItem *child : rect->childItems()) {
+        if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+            badge->setPos(chosen);
+            break;
+        }
+    }
+    qInfo() << "attachHighlightStepBadge: restore seq=" << seq << "pos=" << chosen;
+}
+
+void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int seq, const QRectF &shot,
+                              const QPointF &cursorScene)
+{
+    if (!ensureStepBadge(rect, color, seq)) {
+        return;
+    }
+    placeHighlightStepBadge(rect, shot, cursorScene);
+    qInfo() << "attachHighlightStepBadge: cursor seq=" << seq << "scene=" << cursorScene;
 }
 
 void syncStepNumbers(QGraphicsScene *scene)
@@ -341,8 +476,7 @@ void layoutHighlightChrome(QGraphicsRectItem *rect)
             qInfo() << "layoutHighlightChrome: caption width=" << text->textWidth();
         }
         if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
-            badge->setPos(box.topLeft() + QPointF(-14, -14));
-            qInfo() << "layoutHighlightChrome: badge pos=" << badge->pos();
+            qInfo() << "layoutHighlightChrome: keep step badge pos=" << badge->pos();
         }
     }
 }
@@ -518,25 +652,25 @@ int StepBadgeItem::seq() const
     return data(kAnnotateRoleStepSeq).toInt();
 }
 
+// ─── Ariadne's Thread [AT-0135] ─────────────────────
+// What: Steps badge fill is always opaque; Fill slider only tints the rectangle
+// Why:  Digit sat on a translucent square and became unreadable
+// Date: 2026-08-26
+// Related: [AT-0108] AnnotateItems.cpp:applyHighlightAppearance, docs/PRD-02-annotate-tools.md
+// ─────────────────────────────────────────────────────
 void StepBadgeItem::applyColor(const QColor &color)
 {
     int width = 2;
-    int alpha = 220;
     if (parentItem()) {
         width = highlightStrokeWidth(parentItem());
-        alpha = highlightFillAlpha(parentItem());
     }
     setPen(QPen(color, width));
-    if (alpha <= 0) {
-        setBrush(Qt::NoBrush);
-    } else {
-        QColor fill = color;
-        fill.setAlpha(alpha);
-        setBrush(fill);
-    }
+    QColor fill = color;
+    fill.setAlpha(255);
+    setBrush(fill);
     m_ink = contrastInk(color);
     update();
-    qInfo() << "StepBadgeItem: applyColor" << color << "width=" << width << "alpha=" << alpha
+    qInfo() << "StepBadgeItem: applyColor" << color << "width=" << width << "fillAlpha=255"
             << "ink=" << m_ink;
 }
 

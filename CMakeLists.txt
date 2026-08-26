@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SeenShot VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 0.1.2 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,7 +61,15 @@ set(SEENSHOT_SOURCES
     client/src/update/SparkleUpdater.mm
 )
 
-qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES})
+# ─── Ariadne's Thread [AT-0125] ─────────────────────
+# What: Put SeenShot.icns in the app Resources
+# Why:  CFBundleIconFile needs the file inside the bundle
+# Date: 2026-08-26
+# Related: [AT-0124] packaging/macos/Info.plist, packaging/macos/SeenShot.icns
+# ─────────────────────────────────────────────────────
+set(SEENSHOT_ICNS ${CMAKE_SOURCE_DIR}/packaging/macos/SeenShot.icns)
+set_source_files_properties(${SEENSHOT_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS})
 
 set_source_files_properties(
     client/src/camera/CameraCapture.mm
@@ -102,6 +110,7 @@ set_target_properties(SeenShot PROPERTIES
     INSTALL_RPATH "@executable_path/../Frameworks"
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist
     MACOSX_BUNDLE_BUNDLE_NAME "SeenShot"
+    MACOSX_BUNDLE_ICON_FILE SeenShot.icns
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.seenshot.app"
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}

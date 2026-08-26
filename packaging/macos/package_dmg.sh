@@ -44,10 +44,16 @@ else
   echo "package_dmg: CODESIGN_IDENTITY empty, skipping sign"
 fi
 
-DMG="${BUILD}/SeenShot-0.1.0-arm64.dmg"
-rm -f "${DMG}"
-hdiutil create -volname SeenShot -srcfolder "${APP}" -ov -format UDZO "${DMG}"
-echo "package_dmg: wrote ${DMG}"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${ROOT}/packaging/macos/Info.plist")"
+DMG="${BUILD}/SeenShot-${VERSION}-arm64.dmg"
+STAGE="${BUILD}/dmg-stage"
+rm -rf "${STAGE}" "${DMG}"
+mkdir -p "${STAGE}"
+ditto "${APP}" "${STAGE}/SeenShot.app"
+ln -s /Applications "${STAGE}/Applications"
+hdiutil create -volname SeenShot -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
+rm -rf "${STAGE}"
+echo "package_dmg: wrote ${DMG} version=${VERSION}"
 
 if [[ -n "${IDENTITY}" && -n "${PROFILE}" ]]; then
   echo "package_dmg: notarize profile=${PROFILE}"

@@ -20,6 +20,7 @@ public:
 
     bool startPreview(QWidget *host, QString *errorCode);
     void syncPreviewLayer();
+    void setPreviewSelected(bool selected);
     void captureStill();
     void stop();
     bool isRunning() const;
@@ -33,4 +34,5 @@ private:
     void *m_previewLayer = nullptr;
     void *m_photoOutput = nullptr;
     void *m_delegate = nullptr;
+    bool m_previewSelected = false;
 };

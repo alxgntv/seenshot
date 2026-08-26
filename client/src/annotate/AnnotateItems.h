@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QImage>
+#include <QPointF>
 #include <QGraphicsPixmapItem>
 #include <QPainterPath>
 #include <QGraphicsRectItem>
@@ -51,6 +52,9 @@ QColor contrastInk(const QColor &fill);
 void syncStepNumbers(QGraphicsScene *scene);
 void applyHighlightAppearance(QGraphicsRectItem *rect, const QColor &color, HighlightStyle style);
 void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int seq, const QRectF &shot);
+void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int seq, const QRectF &shot,
+                              const QPointF &cursorScene);
+void placeHighlightStepBadge(QGraphicsRectItem *rect, const QRectF &shot, const QPointF &cursorScene);
 QImage boxBlur(const QImage &patch, int radius);
 void setBlurSource(QGraphicsItem *item, const QImage &source);
 int blurRadius(const QGraphicsItem *item);

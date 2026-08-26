@@ -132,8 +132,14 @@
     const RELEASES_URL = "https://api.github.com/repos/" + REPO + "/releases";
     const FALLBACK = "https://github.com/" + REPO + "/releases";
 
-    function zipAsset(release) {
+    function downloadAsset(release) {
       const assets = Array.isArray(release.assets) ? release.assets : [];
+      const dmg = assets.find(function (asset) {
+        return typeof asset.name === "string" && asset.name.indexOf(".dmg") !== -1;
+      });
+      if (dmg) {
+        return dmg;
+      }
       return assets.find(function (asset) {
         return typeof asset.name === "string" && asset.name.indexOf(".zip") !== -1;
       }) || null;
@@ -171,30 +177,30 @@
         return;
       }
       const latest = published[0];
-      const latestZip = zipAsset(latest);
+      const latestAsset = downloadAsset(latest);
       const version = latest.tag_name || latest.name || "latest";
-      if (latestZip && latestZip.browser_download_url) {
-        latestLink.href = latestZip.browser_download_url;
+      if (latestAsset && latestAsset.browser_download_url) {
+        latestLink.href = latestAsset.browser_download_url;
         latestLink.textContent = "Download " + version;
-        latestMeta.textContent = (latestZip.name || "zip") + " · " + formatBytes(latestZip.size);
-        console.log("SeenShot site: latest zip=" + latestZip.browser_download_url);
+        latestMeta.textContent = (latestAsset.name || "dmg") + " · " + formatBytes(latestAsset.size);
+        console.log("SeenShot site: latest asset=" + latestAsset.browser_download_url);
       } else {
         latestLink.href = latest.html_url || FALLBACK;
         latestLink.textContent = "Open " + version;
-        latestMeta.textContent = "No zip asset on this release.";
-        console.warn("SeenShot site: latest release has no zip asset tag=" + version);
+        latestMeta.textContent = "No DMG asset on this release.";
+        console.warn("SeenShot site: latest release has no dmg asset tag=" + version);
       }
       list.innerHTML = "";
       published.forEach(function (release) {
-        const zip = zipAsset(release);
+        const asset = downloadAsset(release);
         const item = document.createElement("article");
         item.className = "release";
         const tag = release.tag_name || release.name || "release";
         const date = formatDate(release.published_at);
         const badge = release.prerelease ? " · Pre-release" : "";
-        const href = zip && zip.browser_download_url ? zip.browser_download_url : (release.html_url || FALLBACK);
-        const label = zip ? "Download " + (zip.name || "zip") : "Open on GitHub";
-        const size = zip ? " · " + formatBytes(zip.size) : "";
+        const href = asset && asset.browser_download_url ? asset.browser_download_url : (release.html_url || FALLBACK);
+        const label = asset ? "Download " + (asset.name || "dmg") : "Open on GitHub";
+        const size = asset ? " · " + formatBytes(asset.size) : "";
         item.innerHTML =
           '<div class="release-top"><strong>' + tag + badge + "</strong><span>" + date + size + "</span></div>" +
           '<a href="' + href + '">' + label + "</a>" +

@@ -40,11 +40,11 @@ As-is of Stage 1 in the current client:
 One Square button. Not Border / Fill / Fill + text as three tools.
 
 - **Stroke** slider — border width of the last Square or Steps rectangle (and its number badge).
-- **Fill** slider — fill alpha of that same rectangle and badge. `0` = stroke only.
-- Color slider (section 4) sets the hue. Fill stays translucent when alpha is below 255.
+- **Fill** slider — fill alpha of that same rectangle. `0` = stroke only. The Steps number badge fill stays opaque (255).
+- Color slider (section 4) sets the hue. Rectangle fill stays translucent when alpha is below 255.
 - Caption text is the separate Text tool. Do not add a second text tool on the square.
 
-Steps stays a separate tool (section 3). Same Stroke / Fill sliders apply to a Steps rectangle and its number badge.
+Steps stays a separate tool (section 3). Stroke still applies to the Steps rectangle and its number badge. Fill applies only to the rectangle.
 
 ---
 
@@ -54,6 +54,7 @@ A separate tool. Not a fourth Highlight style. Used for step-by-step guides.
 
 - First marker placed on this frame = `1`. Next = `2`. No cap.
 - The number is visible on the marker (square / badge).
+- The badge appears only after mouse release. It sits outside the rectangle, corner touching corner. Prefer the corner nearest the release cursor when that 28×28 badge fits in `shotRect`. If it does not fit, the next-nearest corner that fits. If none fit, clamp the nearest outside corner into `shotRect`.
 - Numbering exists only inside the current editor (one screenshot).
 - Undo / delete of a step renumbers the remaining markers to `1…n` in creation order. Gaps such as 1, 2, 4 are forbidden.
 - Marker style: stroke + fill of the current slider color. Digit is contrast and readable.

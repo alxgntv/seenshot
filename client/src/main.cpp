@@ -5,6 +5,8 @@
 
 #include <QApplication>
 #include <QDebug>
+#include <QDir>
+#include <QIcon>
 
 // ─── Ariadne's Thread [AT-0103] ─────────────────────
 // What: Start PostHog after Logger, shutdown after exec
@@ -16,11 +18,15 @@ int main(int argc, char *argv[])
 {
     QApplication::setApplicationName(QStringLiteral("SeenShot"));
     QApplication::setOrganizationName(QStringLiteral("SeenShot"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral("0.1.2"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    const QString icns = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Resources/SeenShot.icns"));
+    const QIcon appIcon(icns);
+    app.setWindowIcon(appIcon);
     Logger::install();
-    qInfo() << "main: SeenShot starting Qt" << QT_VERSION_STR;
+    qInfo() << "main: SeenShot starting Qt" << QT_VERSION_STR
+            << "iconNull=" << appIcon.isNull() << "icns=" << icns;
     Analytics::instance().start();
     SparkleUpdater::start();
     Application seenshot;

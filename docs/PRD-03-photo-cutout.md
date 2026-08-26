@@ -25,10 +25,12 @@ UI strings: English. Logs: English.
 
 ## 1. Photo is a button, not a drawing tool
 
-- Toolbar action **Photo**, next to Blur / Save / Share. Same pattern as Share: one click starts the cycle.
-- Not `Tool::Photo`. Not a second way to draw Highlight / Arrow / Line / Text / Blur.
-- Pressing Photo again after a successful place adds another independent Photo object.
-- A second Photo press while a cycle is already running is ignored. Log only.
+- Toolbar action **Photo**, next to Blur / Save / Share. The button is checkable. It is not `Tool::Photo`.
+- Press on: live camera pip appears on the shot. Press off (unpress): camera stops and the pip is removed. Already placed Photo cutouts stay.
+- The chevron menu keeps **Picture** and **5s timer** for a still + cutout. Those actions do not replace the on/off toggle.
+- Pressing Photo again after a successful place (button is off) starts a new preview. Another still adds another independent Photo object.
+- A Photo press while the white flash / capture is running is ignored. Log only.
+- While the live pip is on, Select / Highlight / Arrow / Line / Text / Blur keep working. Photo must not steal their clicks. Drawing is blocked only during the flash.
 
 ---
 
@@ -44,6 +46,8 @@ UI strings: English. Logs: English.
 ## 3. Preview, countdown, flash
 
 - Live preview over the shot (`AVCaptureVideoPreviewLayer`) so the user can point a finger at a place on the screenshot.
+- The pip is a top-level `Qt::Tool` window mapped onto `shotRect` (not a viewport child). `WA_MacAlwaysShowToolWindow` keeps it visible with `LSUIElement`.
+- The user can drag the pip anywhere inside `shotRect`. Click the pip to select it (white border). Delete / Backspace on a selected pip turns the camera off. Unpress Photo does the same. Escape cancels.
 - Preview is mirrored like a selfie. The saved cutout uses the same orientation as the preview.
 - Countdown **3**, **2**, **1** (UI English) on the preview.
 - Escape cancels. Camera session stops. No item is created.
@@ -91,7 +95,8 @@ Do not add a second Photo tool or a second cutout pipeline.
 
 ## Corner cases
 
-- No camera / no person / TCC denied: error. Nothing is added to the scene.
+- No camera / no person / TCC denied: error. Nothing is added to the scene. The Photo button unchecks.
+- Unpress Photo / Delete on a selected pip / Escape: live preview stops. Already placed Photo cutouts stay.
 - Several Photo items on one frame are allowed. Each is independent.
 - Window closed during countdown: session stops. No item.
 - Cloud encoder may still shrink a large PNG.

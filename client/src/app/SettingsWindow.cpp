@@ -118,6 +118,19 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     });
     connect(m_auth, &AuthSession::sessionChanged, this, &SettingsWindow::onSessionChanged);
 
+    layout->addStretch(1);
+    // ─── Ariadne's Thread [AT-0122] ─────────────────────
+    // What: Show the running app version on Settings
+    // Why:  User must see which build is installed
+    // Date: 2026-08-26
+    // Related: [AT-0123] SignInDialog.cpp, client/src/main.cpp
+    // ─────────────────────────────────────────────────────
+    const QString version = QApplication::applicationVersion();
+    m_version = new QLabel(QStringLiteral("Version %1").arg(version), this);
+    m_version->setAlignment(Qt::AlignCenter);
+    layout->addWidget(m_version);
+    qInfo() << "SettingsWindow: version label" << version;
+
     setMinimumWidth(420);
     setMaximumWidth(480);
     loadHotkeys();

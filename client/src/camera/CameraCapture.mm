@@ -160,8 +160,28 @@ void CameraCapture::syncPreviewLayer()
         return;
     }
     layer.frame = superlayer.bounds;
+    layer.cornerRadius = 8.0;
+    layer.masksToBounds = YES;
+    layer.borderWidth = m_previewSelected ? 3.0 : 1.0;
+    layer.borderColor = [[NSColor colorWithCalibratedWhite:1.0 alpha:m_previewSelected ? 1.0 : 0.75] CGColor];
     qInfo() << "CameraCapture: preview layer frame=" << layer.frame.size.width << "x"
-            << layer.frame.size.height;
+            << layer.frame.size.height << " selected=" << m_previewSelected
+            << " border=" << layer.borderWidth;
+}
+
+// ─── Ariadne's Thread [AT-0128] ─────────────────────
+// What: White CALayer border marks a selected live camera pip
+// Why:  Qt stylesheet on the Tool host covers AVCaptureVideoPreviewLayer
+// Date: 2026-08-26
+// Related: [AT-0074] CameraCapture.mm:syncPreviewLayer, [AT-0129] AnnotateWindow.cpp:setPhotoPipSelected
+// ─────────────────────────────────────────────────────
+void CameraCapture::setPreviewSelected(bool selected)
+{
+    m_previewSelected = selected;
+    qInfo() << "CameraCapture: preview selected=" << selected << " running=" << isRunning();
+    if (m_previewLayer) {
+        syncPreviewLayer();
+    }
 }
 
 void CameraCapture::captureStill()

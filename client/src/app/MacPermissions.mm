@@ -44,6 +44,36 @@ void MacPermissions::pinCaptureOverlay(QWidget *overlay)
             << " ignoresMouse=" << static_cast<bool>([window ignoresMouseEvents]);
 }
 
+// ─── Ariadne's Thread [AT-0126] ─────────────────────
+// What: Pin the camera pip as a floating Tool window without taking key
+// Why:  LSUIElement hid Qt::Tool; shielding/makeKey would steal annotate input
+// Date: 2026-08-26
+// Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, [AT-0128] AnnotateWindow.cpp:layoutPhotoOverlay
+// ─────────────────────────────────────────────────────
+void MacPermissions::pinFloatingToolWindow(QWidget *overlay)
+{
+    if (!overlay) {
+        qWarning() << "MacPermissions: pinFloatingToolWindow null";
+        return;
+    }
+    overlay->winId();
+    NSView *view = (__bridge NSView *)reinterpret_cast<void *>(overlay->winId());
+    NSWindow *window = view.window;
+    if (window == nil) {
+        qWarning() << "MacPermissions: pinFloatingToolWindow no NSWindow visible=" << overlay->isVisible();
+        return;
+    }
+    [window setLevel:NSFloatingWindowLevel];
+    [window setIgnoresMouseEvents:NO];
+    [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces
+                                  | NSWindowCollectionBehaviorFullScreenAuxiliary
+                                  | NSWindowCollectionBehaviorTransient];
+    [window orderFront:nil];
+    qInfo() << "MacPermissions: pinFloatingToolWindow visible=" << overlay->isVisible()
+            << " geo=" << overlay->geometry() << " level=" << static_cast<int>([window level])
+            << " ignoresMouse=" << static_cast<bool>([window ignoresMouseEvents]);
+}
+
 void MacPermissions::openScreenRecordingSettings()
 {
     NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];

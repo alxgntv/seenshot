@@ -55,10 +55,10 @@ For each release:
 
 - Raise `CFBundleShortVersionString` and `CFBundleVersion` in `packaging/macos/Info.plist`.
 - Sign the `.app` with the existing Apple Development identity and `packaging/macos/SeenShot.entitlements`.
-- Upload a Sparkle archive (zip of the `.app`) and an `appcast.xml` to `https://updates.seenshot.com/`.
+- Upload a Sparkle archive (UDZO DMG of the `.app` plus an Applications symlink) and an `appcast.xml` to `https://updates.seenshot.com/`.
 - Sign the enclosure with Sparkle’s official EdDSA tools. Put the public key in `SUPublicEDKey`. An empty key is forbidden.
 
-The website download and the feed enclosure are the same channel. Do not invent a second “latest.dmg” installer path inside the app.
+The website download and the feed enclosure are the same DMG. Do not invent a second zip or “latest.dmg” installer path inside the app.
 
 ---
 

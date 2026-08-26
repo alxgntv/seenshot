@@ -9,7 +9,9 @@
 #include <QJsonObject>
 #include <QLineF>
 #include <QMainWindow>
+#include <QPoint>
 #include <QPointF>
+#include <QRect>
 #include <QRectF>
 
 class QAction;
@@ -29,6 +31,7 @@ class QGraphicsRectItem;
 class ShotPhotoItem;
 class QGraphicsScene;
 class QGraphicsView;
+class QEvent;
 class QKeyEvent;
 class QMouseEvent;
 class QPainter;
@@ -91,6 +94,7 @@ protected:
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void moveEvent(QMoveEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void undo();
@@ -116,7 +120,7 @@ private slots:
     void setBackgroundPreset(int preset);
     void onRadiusChanged(int radius);
     void onShadowChanged(int amount);
-    void startPhotoPreview();
+    void togglePhotoPreview();
     void startPhotoPicture();
     void startPhotoTimer5();
     void onPhotoStillReady(const QImage &image);
@@ -154,6 +158,11 @@ private:
     void finishPhotoStill(const QImage &image);
     bool photoCaptureBusy() const;
     void abortPhotoCycle(bool notifyEnded = true);
+    void syncPhotoButtonChecked();
+    void setPhotoPipSelected(bool selected);
+    void movePhotoOverlayToGlobal(const QPoint &globalTopLeft);
+    void persistPhotoPipScenePos();
+    QRect photoPipClampRect() const;
     void layoutUpdateCard();
     void ensureUpdateCard();
     QJsonObject serializeSession(QHash<QString, QImage> *assets) const;
@@ -244,6 +253,11 @@ private:
     int m_photoCount = 0;
     int m_photoToken = 0;
     bool m_photoCycle = false;
+    bool m_photoPipSelected = false;
+    bool m_photoPipUserMoved = false;
+    bool m_photoPipDragging = false;
+    QPointF m_photoPipSceneTopLeft;
+    QPoint m_photoPipDragOffset;
     PhotoFollow m_photoFollow = PhotoFollow::None;
     PhotoFlash m_photoFlashPhase = PhotoFlash::Idle;
     QImage m_pendingStill;

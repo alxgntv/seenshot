@@ -5,6 +5,8 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QMutexLocker>
 
 #include <posthog/posthog.h>
@@ -15,11 +17,11 @@ Analytics &Analytics::instance()
     return g;
 }
 
-// ─── Ariadne's Thread [AT-0102] ─────────────────────
-// What: initialize, crash handler, setLogFile, then app_started
-// Why:  Official posthog-cpp cycle; empty key must not call initialize
+// ─── Ariadne's Thread [AT-0137] ─────────────────────
+// What: Log CrashReports path and pending_crash.txt after initialize
+// Why:  Next-launch $exception only sends if that file exists
 // Date: 2026-08-26
-// Related: [AT-0103] main.cpp, [AT-0004] Logger.cpp, docs/PRD-06-analytics.md
+// Related: [AT-0102] Analytics.cpp:start, docs/PRD-06-analytics.md
 // ─────────────────────────────────────────────────────
 void Analytics::start()
 {
@@ -49,8 +51,15 @@ void Analytics::start()
         m_client.reset();
         return;
     }
-    qInfo() << "Analytics: initialized enabled=" << m_client->isEnabled();
+    qInfo() << "Analytics: initialized enabled=" << m_client->isEnabled()
+            << " distinctIdChars=" << static_cast<int>(m_client->getDistinctId().size());
+    const QString crashDir =
+        QString::fromStdString(PostHog::Client::getDefaultCrashDir("SeenShot"));
+    const QString pendingCrash = QDir(crashDir).filePath(QStringLiteral("pending_crash.txt"));
+    qInfo() << "Analytics: crash dir=" << crashDir
+            << " pendingCrashExists=" << QFile::exists(pendingCrash);
     m_client->installCrashHandler();
+    qInfo() << "Analytics: installCrashHandler done pendingAfter=" << QFile::exists(pendingCrash);
     const QString logPath = Logger::filePath();
     if (!logPath.isEmpty()) {
         m_client->setLogFile(logPath.toStdString(), 50);

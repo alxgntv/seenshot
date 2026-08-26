@@ -127,38 +127,47 @@ log "codesign app"
 /usr/bin/codesign --verify --deep --strict "${APP}"
 log "codesign verify ok"
 
-ZIP_NAME="SeenShot-${VERSION}-arm64.zip"
-ZIP_PATH="${BUILD}/${ZIP_NAME}"
-rm -f "${ZIP_PATH}"
-log "zip ${ZIP_NAME}"
-ditto -c -k --keepParent "${APP}" "${ZIP_PATH}"
-[[ -f "${ZIP_PATH}" ]] || fail "zip missing"
+# ─── Ariadne's Thread [AT-0136] ─────────────────────
+# What: Release enclosure is a UDZO DMG with an Applications symlink
+# Why:  Users install by dragging the app; Sparkle accepts the same DMG
+# Date: 2026-08-26
+# Related: [AT-0027] packaging/macos/package_dmg.sh, docs/PRD-05-auto-update.md
+# ─────────────────────────────────────────────────────
+DMG_NAME="SeenShot-${VERSION}-arm64.dmg"
+DMG_PATH="${BUILD}/${DMG_NAME}"
+STAGE="${BUILD}/dmg-stage"
+rm -rf "${STAGE}" "${DMG_PATH}"
+mkdir -p "${STAGE}"
+ditto "${APP}" "${STAGE}/SeenShot.app"
+ln -s /Applications "${STAGE}/Applications"
+log "hdiutil create ${DMG_NAME}"
+hdiutil create -volname SeenShot -srcfolder "${STAGE}" -ov -format UDZO "${DMG_PATH}"
+rm -rf "${STAGE}"
+[[ -f "${DMG_PATH}" ]] || fail "dmg missing"
 
 if [[ "${SKIP_NOTARY}" != "1" ]]; then
   if [[ -n "${NOTARY_KEY:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER:-}" ]]; then
     KEY_FILE="$(mktemp)"
     printf '%s' "${NOTARY_KEY}" > "${KEY_FILE}"
     log "notarytool submit api key"
-    xcrun notarytool submit "${ZIP_PATH}" --key "${KEY_FILE}" --key-id "${NOTARY_KEY_ID}" \
+    xcrun notarytool submit "${DMG_PATH}" --key "${KEY_FILE}" --key-id "${NOTARY_KEY_ID}" \
       --issuer "${NOTARY_ISSUER}" --wait
     rm -f "${KEY_FILE}"
   elif [[ -n "${NOTARY_PROFILE:-}" ]]; then
     log "notarytool submit profile=${NOTARY_PROFILE}"
-    xcrun notarytool submit "${ZIP_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
+    xcrun notarytool submit "${DMG_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
   else
     fail "notary credentials missing. Set NOTARY_KEY+NOTARY_KEY_ID+NOTARY_ISSUER or NOTARY_PROFILE, or SKIP_NOTARY=1"
   fi
-  log "stapler staple app"
-  xcrun stapler staple "${APP}"
-  rm -f "${ZIP_PATH}"
-  ditto -c -k --keepParent "${APP}" "${ZIP_PATH}"
-  log "re-zip after staple"
+  log "stapler staple dmg"
+  xcrun stapler staple "${DMG_PATH}"
+  log "dmg stapled"
 else
   log "skip notary"
 fi
 
-LENGTH="$(stat -f%z "${ZIP_PATH}")"
-log "zip length=${LENGTH}"
+LENGTH="$(stat -f%z "${DMG_PATH}")"
+log "dmg length=${LENGTH}"
 
 SIGN_ARGS=(--ed-key-file "${SPARKLE_ED_KEY_FILE}")
 if [[ ! -f "${SPARKLE_ED_KEY_FILE}" ]]; then
@@ -175,13 +184,13 @@ else
   log "using ed key file"
 fi
 
-ED_SIG="$("${SPARKLE_BIN}/sign_update" -p "${SIGN_ARGS[@]}" "${ZIP_PATH}")"
+ED_SIG="$("${SPARKLE_BIN}/sign_update" -p "${SIGN_ARGS[@]}" "${DMG_PATH}")"
 [[ -n "${ED_SIG}" ]] || fail "sign_update produced empty signature"
 log "edSignature chars=${#ED_SIG}"
 
 if [[ "${SKIP_APPCAST}" != "1" ]]; then
   ARCHIVES="$(mktemp -d)"
-  cp "${ZIP_PATH}" "${ARCHIVES}/${ZIP_NAME}"
+  cp "${DMG_PATH}" "${ARCHIVES}/${DMG_NAME}"
   if [[ -f "${DOCS_APPCAST}" ]]; then
     cp "${DOCS_APPCAST}" "${ARCHIVES}/appcast.xml"
   fi
@@ -206,5 +215,5 @@ if [[ "${SPARKLE_ED_KEY_FILE}" == /tmp/* ]] || [[ "${SPARKLE_ED_KEY_FILE}" == /v
   rm -f "${SPARKLE_ED_KEY_FILE}"
 fi
 
-echo "${ZIP_PATH}"
-log "done zip=${ZIP_PATH} length=${LENGTH}"
+echo "${DMG_PATH}"
+log "done dmg=${DMG_PATH} length=${LENGTH}"

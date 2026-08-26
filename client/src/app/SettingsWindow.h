@@ -50,5 +50,6 @@ private:
     QPushButton *m_proBtn = nullptr;
     QPushButton *m_exportBtn = nullptr;
     QPushButton *m_deleteBtn = nullptr;
+    QLabel *m_version = nullptr;
     bool m_syncingLaunch = false;
 };

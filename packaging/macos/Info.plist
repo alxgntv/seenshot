@@ -12,12 +12,20 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>SeenShot</string>
+	<!-- ─── Ariadne's Thread [AT-0124] ─────────────────────
+	  What: App icon file in Contents/Resources
+	  Why:  Finder and the bundle must show the SeenShot mark
+	  Date: 2026-08-26
+	  Related: [AT-0125] CMakeLists.txt, packaging/macos/SeenShot.icns
+	─────────────────────────────────────────────────────── -->
+	<key>CFBundleIconFile</key>
+	<string>SeenShot</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.2</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
+	<string>0.1.2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
