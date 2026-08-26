@@ -2,5 +2,13 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>SeenShot</title>
+    <item>
+      <title>SeenShot 0.1.1</title>
+      <pubDate>Wed, 26 Aug 2026 11:51:19 +0000</pubDate>
+      <sparkle:version>0.1.1</sparkle:version>
+      <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/alxgntv/seenshot/releases/download/v0.1.1/SeenShot-0.1.1-arm64.zip" length="34536498" type="application/octet-stream" sparkle:edSignature="AoyDUE5mrTQL2PDurKwSJFMM6CSIKV0zovy1jU6MrOLwKnaAkHXPLNJzC2c3ulN6OlZcKMQfQGKXUzhA94j0AA==" />
+    </item>
   </channel>
 </rss>
