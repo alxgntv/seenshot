@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>SeenShot</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.seenshot.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SeenShot</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSCameraUsageDescription</key>
+	<string>SeenShot uses the camera so you can place a photo of yourself on the screenshot.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>SeenShot captures a region of your screen so you can annotate and share a screenshot.</string>
+	<key>SUFeedURL</key>
+	<string>https://updates.seenshot.com/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUPublicEDKey</key>
+	<string>UOgHV9yr9Er/l1wB9JHf3Hv9kjf81ViYjkLy/3IJJaY=</string>
+	<!-- ─── Ariadne's Thread [AT-0064] ─────────────────────
+	  What: Firebase Web API key and project id for Identity Toolkit REST
+	  Why:  Desktop auth uses official REST, not the Firebase C++ or JS SDK
+	  Date: 2026-08-25
+	  Related: [AT-0005] Config.cpp, [AT-0016] FirebaseAuthClient.h
+	─────────────────────────────────────────────────────── -->
+	<key>firebaseApiKey</key>
+	<string>AIzaSyCM5aJRTX9I8DXCmtbPqZKugi-m8VfMzco</string>
+	<key>firebaseProjectId</key>
+	<string>seenshot-app</string>
+	<key>firebaseAuthDomain</key>
+	<string>seenshot-app.firebaseapp.com</string>
+	<key>firebaseAppId</key>
+	<string>1:101835991265:web:4fb02343fc7f1d0a29afa0</string>
+	<key>googleOAuthClientId</key>
+	<string></string>
+	<key>emailLinkContinueUrl</key>
+	<string>https://seenshot-app.firebaseapp.com/</string>
+	<!-- ─── Ariadne's Thread [AT-0101] ─────────────────────
+	  What: PostHog project API key and EU host
+	  Why:  PRD-06 analytics + crash reports via posthog-cpp
+	  Date: 2026-08-26
+	  Related: [AT-0101] Config.cpp:posthogApiKey
+	─────────────────────────────────────────────────────── -->
+	<key>posthogApiKey</key>
+	<string>phc_orEfVUeVTrftdq6GbAQJPnRqw23bRHCHWcmJTaQY2Ftc</string>
+	<key>posthogHost</key>
+	<string>https://eu.i.posthog.com</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.seenshot.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>seenshot</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

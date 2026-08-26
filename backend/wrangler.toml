@@ -1,0 +1,41 @@
+name = "seenshot-api"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cache Rules (dashboard, not wrangler):
+# /p/* and /s/* -> Cache Everything, Ignore query string
+
+[[d1_databases]]
+binding = "DB"
+database_name = "seenshot"
+database_id = "REPLACE_D1_ID"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "seenshot"
+
+[durable_objects]
+bindings = [{ name = "QUOTA", class_name = "QuotaShard" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QuotaShard"]
+
+[triggers]
+crons = ["*/5 * * * *", "0 * * * *"]
+
+[vars]
+FIREBASE_PROJECT_ID = "REPLACE_FIREBASE_PROJECT"
+PUBLIC_BASE_URL = "https://shot.seenshot.com"
+# PUBLIC_BASE_URL is the R2 custom domain for /p/*.png (no Worker).
+# API Worker hostname must stay separate (api.seenshot.com).
+# Dashboard Cache Rules on that R2 domain: Cache Everything + Ignore query string for /p/* and /s/*.
+R2_ACCOUNT_ID = "REPLACE_ACCOUNT"
+R2_ACCESS_KEY_ID = "REPLACE_ACCESS_KEY"
+R2_SECRET_ACCESS_KEY = "REPLACE_SECRET"
+R2_BUCKET = "seenshot"
+STRIPE_PRICE_ID = "REPLACE_PRICE"
+ABUSE_EMAIL = "abuse@seenshot.com"
+
+# Secrets via wrangler secret: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, FIREBASE_PROJECT_ID if needed

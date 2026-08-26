@@ -1,0 +1,14 @@
+build/
+backend/node_modules/
+backend/.dev.vars
+.DS_Store
+*.user
+CMakeUserPresets.json
+*.p12
+*.p8
+eddsa_priv.pem
+**/.seenshot/
+.env
+.env.*
+!.env.example
+

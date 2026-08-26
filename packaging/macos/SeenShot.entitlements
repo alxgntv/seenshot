@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<!-- ─── Ariadne's Thread [AT-0052] ─────────────────────
+	  What: Allow MAP_JIT executable memory for Qt PCRE2
+	  Why:  Hardened Runtime traps pthread_jit_write_protect_np when QFileDialog parses PNG (*.png)
+	  Date: 2026-08-25
+	  Related: [AT-0012] AnnotateWindow.cpp:saveLocal
+	─────────────────────────────────────────────────────── -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<!-- ─── Ariadne's Thread [AT-0062] ─────────────────────
+	  What: Hardened Runtime Camera entitlement
+	  Why:  Without com.apple.security.device.camera, requestAccess never registers SeenShot in Privacy Camera
+	  Date: 2026-08-25
+	  Related: [AT-0061] MacPermissions.mm:requestCamera, packaging/macos/Info.plist:NSCameraUsageDescription
+	─────────────────────────────────────────────────────── -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+</dict>
+</plist>

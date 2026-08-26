@@ -1,0 +1,21 @@
+{
+  "name": "seenshot-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute seenshot --file=./schema.sql"
+  },
+  "dependencies": {
+    "jose": "^6.0.11",
+    "pngjs": "^7.0.0",
+    "stripe": "^18.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.28.0"
+  }
+}

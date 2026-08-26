@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch SeenShot",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/SeenShot.app/Contents/MacOS/SeenShot",
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "sourceLanguages": ["cpp", "objc"]
+        },
+        {
+            "name": "Attach SeenShot",
+            "type": "lldb",
+            "request": "attach",
+            "program": "${workspaceFolder}/build/SeenShot.app/Contents/MacOS/SeenShot",
+            "pid": "${command:pickProcess}",
+            "stopOnEntry": false,
+            "sourceLanguages": ["cpp", "objc"]
+        }
+    ]
+}
