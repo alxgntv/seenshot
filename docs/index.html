@@ -70,6 +70,16 @@
       font-size: 13px;
       opacity: 0.85;
     }
+    .hero-shot {
+      display: block;
+      width: 100%;
+      height: auto;
+      margin: 36px 0 0;
+      border: 4px solid #111;
+      border-radius: 18px;
+      box-shadow: 5px 5px 0 #111;
+      background: #2448d6;
+    }
     h2 {
       margin: 56px 0 16px;
       font-size: 22px;
@@ -100,6 +110,15 @@
       line-height: 1.45;
       opacity: 0.9;
     }
+    .previous-releases {
+      margin: 20px 0 0;
+    }
+    .previous-releases summary {
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 16px;
+      margin: 0 0 12px;
+    }
     .error, .empty {
       padding: 16px 18px;
       border: 4px solid #111;
@@ -107,6 +126,81 @@
       background: #1d3bb8;
     }
     .error a, .empty a { color: var(--yellow); }
+    /* ─── Ariadne's Thread [AT-0147] ─────────────────────
+       What: Full bento row is copy left, shot right
+       Why:  Reference grid: 2/3+1/3, full split, 1/3+2/3, full split
+       Date: 2026-08-26
+       Related: [AT-0146] docs/index.html:.bento
+       ───────────────────────────────────────────────────── */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .bento-card {
+      min-width: 0;
+      padding: 18px;
+      border: 4px solid #111;
+      border-radius: 18px;
+      background: #2448d6;
+      box-shadow: 5px 5px 0 #111;
+    }
+    .bento-card.wide { grid-column: span 2; }
+    .bento-card.narrow { grid-column: span 1; }
+    .bento-card.full {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 18px;
+      align-items: center;
+    }
+    .bento-shot-wrap {
+      width: 100%;
+      min-height: 220px;
+      aspect-ratio: 16 / 10;
+      margin: 0 0 14px;
+      overflow: hidden;
+      border: 3px solid #111;
+      border-radius: 12px;
+      background: #1d3bb8;
+    }
+    .bento-card.full .bento-shot-wrap {
+      margin: 0;
+      min-height: 280px;
+      height: 100%;
+      aspect-ratio: auto;
+    }
+    .bento-card.full .bento-copy {
+      min-width: 0;
+    }
+    .bento-shot {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .bento-card h3 {
+      margin: 0 0 6px;
+      font-size: 22px;
+    }
+    .bento-card p {
+      margin: 0;
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    @media (max-width: 600px) {
+      .bento { grid-template-columns: 1fr; }
+      .bento-card.wide,
+      .bento-card.narrow,
+      .bento-card.full { grid-column: 1; }
+      .bento-card.full {
+        grid-template-columns: 1fr;
+      }
+      .bento-card.full .bento-shot-wrap {
+        min-height: 220px;
+        aspect-ratio: 16 / 10;
+      }
+    }
   </style>
 </head>
 <body>
@@ -119,11 +213,111 @@
   <main>
     <section class="hero">
       <img src="SeenShot.png" alt="SeenShot">
-      <h1>Seen<span>Shot</span></h1>
-      <p class="lede">Screenshot annotation for Mac. Apple Silicon, macOS 14+.</p>
+      <!-- ─── Ariadne's Thread [AT-0144] ─────────────────────
+        What: Hero h1 is the slogan Seen it? Shot it!
+        Why:  Product name stays on the icon and in the document title
+        Date: 2026-08-26
+        Related: [AT-0143] docs/index.html, [AT-0133] docs/index.html
+      ─────────────────────────────────────────────────────── -->
+      <h1>Seen it? <span>Shot</span> it!</h1>
+      <!-- ─── Ariadne's Thread [AT-0143] ─────────────────────
+        What: Hero lede is the product one-liner
+        Why:  Replace capture/platform line with fast lightweight annotation copy
+        Date: 2026-08-26
+        Related: [AT-0133] docs/index.html, [AT-0142] docs/index.html
+      ─────────────────────────────────────────────────────── -->
+      <p class="lede">Fast lightweight screenshot app for Mac with superfunctional annotation.</p>
       <a id="latest-download" class="download" href="https://github.com/alxgntv/seenshot/releases">Download</a>
       <p id="latest-meta" class="meta">Loading releases…</p>
     </section>
+    <!-- ─── Ariadne's Thread [AT-0145] ─────────────────────
+      What: Full-width product image slot under the hero
+      Why:  Screenshot art lands later as docs/hero.png
+      Date: 2026-08-26
+      Related: [AT-0144] docs/index.html, [AT-0133] docs/index.html
+    ─────────────────────────────────────────────────────── -->
+    <img class="hero-shot" src="hero.png" alt="SeenShot">
+    <h2>Features</h2>
+    <div class="bento">
+      <article class="bento-card wide">
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/01-photo.png" alt="Photo">
+        </div>
+        <h3>Photo</h3>
+        <p>Add a webcam selfie on the screenshot in one click.</p>
+      </article>
+      <article class="bento-card narrow">
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/02-steps.png" alt="Steps">
+        </div>
+        <h3>Steps</h3>
+        <p>Highlight a zone with numbering.</p>
+      </article>
+      <article class="bento-card full">
+        <div class="bento-copy">
+          <h3>Square</h3>
+          <p>Highlight a zone.</p>
+        </div>
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/03-square.png" alt="Square">
+        </div>
+      </article>
+      <article class="bento-card narrow">
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/04-text.png" alt="Text">
+        </div>
+        <h3>Text</h3>
+        <p>Add text on the screenshot.</p>
+      </article>
+      <article class="bento-card wide">
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/05-blur.png" alt="Blur">
+        </div>
+        <h3>Blur</h3>
+        <p>Blur a piece of the screenshot.</p>
+      </article>
+      <article class="bento-card full">
+        <div class="bento-copy">
+          <h3>Background</h3>
+          <p>Add a background under the screenshot.</p>
+        </div>
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/06-background.png" alt="Background">
+        </div>
+      </article>
+      <article class="bento-card wide">
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/07-color.png" alt="Color">
+        </div>
+        <h3>Color</h3>
+        <p>Color picker for the last annotation.</p>
+      </article>
+      <article class="bento-card narrow">
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/08-share.png" alt="Share">
+        </div>
+        <h3>Share</h3>
+        <p>Share the screenshot on the internet.</p>
+      </article>
+      <article class="bento-card full">
+        <div class="bento-copy">
+          <h3>Embed</h3>
+          <p>Add the screenshot to a website as an image.</p>
+        </div>
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/09-embed.png" alt="Embed">
+        </div>
+      </article>
+      <article class="bento-card full">
+        <div class="bento-copy">
+          <h3>Arrow &amp; Line</h3>
+          <p>Draw arrows and lines on the screenshot.</p>
+        </div>
+        <div class="bento-shot-wrap">
+          <img class="bento-shot" src="bento/10-arrows.png" alt="Arrow and Line">
+        </div>
+      </article>
+    </div>
     <h2>Releases</h2>
     <div id="releases"></div>
   </main>
@@ -131,6 +325,49 @@
     const REPO = "alxgntv/seenshot";
     const RELEASES_URL = "https://api.github.com/repos/" + REPO + "/releases";
     const FALLBACK = "https://github.com/" + REPO + "/releases";
+    const lede = document.querySelector(".lede");
+    const heroTitle = document.querySelector("h1");
+    console.log("SeenShot site: lede=" + (lede ? lede.textContent : "") + " chars=" + (lede ? lede.textContent.length : 0));
+    console.log("SeenShot site: h1=" + (heroTitle ? heroTitle.textContent : "") + " chars=" + (heroTitle ? heroTitle.textContent.length : 0));
+    const heroShot = document.querySelector(".hero-shot");
+    if (heroShot) {
+      console.log("SeenShot site: hero shot src=" + heroShot.getAttribute("src") + " complete=" + heroShot.complete);
+      heroShot.addEventListener("load", function () {
+        console.log(
+          "SeenShot site: hero shot loaded natural=" + heroShot.naturalWidth + "x" + heroShot.naturalHeight +
+            " display=" + heroShot.clientWidth + "x" + heroShot.clientHeight
+        );
+      });
+      heroShot.addEventListener("error", function () {
+        console.warn("SeenShot site: hero shot missing src=" + heroShot.getAttribute("src") + " hide until docs/hero.png exists");
+        heroShot.hidden = true;
+      });
+    }
+    const bentoShots = document.querySelectorAll(".bento-shot");
+    const bentoCards = document.querySelectorAll(".bento-card");
+    console.log("SeenShot site: bento shots=" + bentoShots.length + " cards=" + bentoCards.length);
+    bentoCards.forEach(function (card, index) {
+      const title = card.querySelector("h3");
+      console.log(
+        "SeenShot site: bento card[" + index + "] class=" + card.className +
+          " title=" + (title ? title.textContent : "") +
+          " fullSplit=" + card.classList.contains("full")
+      );
+    });
+    bentoShots.forEach(function (shot, index) {
+      const src = shot.getAttribute("src") || "";
+      console.log("SeenShot site: bento[" + index + "] src=" + src + " complete=" + shot.complete);
+      shot.addEventListener("load", function () {
+        console.log(
+          "SeenShot site: bento loaded src=" + src +
+            " natural=" + shot.naturalWidth + "x" + shot.naturalHeight
+        );
+      });
+      shot.addEventListener("error", function () {
+        console.warn("SeenShot site: bento missing src=" + src + " hide until file exists");
+        shot.hidden = true;
+      });
+    });
 
     function downloadAsset(release) {
       const assets = Array.isArray(release.assets) ? release.assets : [];
@@ -145,13 +382,6 @@
       }) || null;
     }
 
-    function formatBytes(bytes) {
-      if (!bytes) {
-        return "";
-      }
-      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-    }
-
     function formatDate(iso) {
       if (!iso) {
         return "";
@@ -161,6 +391,39 @@
         month: "short",
         day: "numeric"
       });
+    }
+
+    // ─── Ariadne's Thread [AT-0140] ─────────────────────
+    // What: Render one GitHub release card: date only, body as product notes
+    // Why:  Site shows the current release; older builds stay in a native details fold
+    // Date: 2026-08-26
+    // Related: [AT-0133] docs/index.html, https://docs.github.com/en/rest/releases/releases
+    // ─────────────────────────────────────────────────────
+    function releaseCard(release) {
+      const asset = downloadAsset(release);
+      const item = document.createElement("article");
+      item.className = "release";
+      const tag = release.tag_name || release.name || "release";
+      const date = formatDate(release.published_at);
+      const badge = release.prerelease ? " · Pre-release" : "";
+      const href = asset && asset.browser_download_url ? asset.browser_download_url : (release.html_url || FALLBACK);
+      const label = asset ? "Download " + (asset.name || "dmg") : "Open on GitHub";
+      const notes = typeof release.body === "string" ? release.body.trim() : "";
+      item.innerHTML =
+        '<div class="release-top"><strong>' + tag + badge + "</strong><span>" + date + "</span></div>" +
+        '<a href="' + href + '">' + label + "</a>" +
+        (notes ? '<p class="notes"></p>' : "");
+      if (notes) {
+        item.querySelector(".notes").textContent = notes;
+      }
+      console.log(
+        "SeenShot site: release card tag=" + tag +
+          " date=" + date +
+          " prerelease=" + Boolean(release.prerelease) +
+          " hasAsset=" + Boolean(asset) +
+          " notesChars=" + notes.length
+      );
+      return item;
     }
 
     function render(releases) {
@@ -177,39 +440,56 @@
         return;
       }
       const latest = published[0];
+      const previous = published.slice(1);
       const latestAsset = downloadAsset(latest);
       const version = latest.tag_name || latest.name || "latest";
+      // ─── Ariadne's Thread [AT-0142] ─────────────────────
+      // What: Hero meta is "stable version: {tag}"
+      // Why:  Filename and byte size are not the stable version label
+      // Date: 2026-08-26
+      // Related: [AT-0140] docs/index.html:releaseCard, [AT-0133] docs/index.html
+      // ─────────────────────────────────────────────────────
+      latestMeta.textContent = "stable version: " + version;
+      console.log(
+        "SeenShot site: stable version=" + version +
+          " prerelease=" + Boolean(latest.prerelease) +
+          " hasAsset=" + Boolean(latestAsset && latestAsset.browser_download_url)
+      );
       if (latestAsset && latestAsset.browser_download_url) {
         latestLink.href = latestAsset.browser_download_url;
         latestLink.textContent = "Download " + version;
-        latestMeta.textContent = (latestAsset.name || "dmg") + " · " + formatBytes(latestAsset.size);
         console.log("SeenShot site: latest asset=" + latestAsset.browser_download_url);
       } else {
         latestLink.href = latest.html_url || FALLBACK;
         latestLink.textContent = "Open " + version;
-        latestMeta.textContent = "No DMG asset on this release.";
         console.warn("SeenShot site: latest release has no dmg asset tag=" + version);
       }
       list.innerHTML = "";
-      published.forEach(function (release) {
-        const asset = downloadAsset(release);
-        const item = document.createElement("article");
-        item.className = "release";
-        const tag = release.tag_name || release.name || "release";
-        const date = formatDate(release.published_at);
-        const badge = release.prerelease ? " · Pre-release" : "";
-        const href = asset && asset.browser_download_url ? asset.browser_download_url : (release.html_url || FALLBACK);
-        const label = asset ? "Download " + (asset.name || "dmg") : "Open on GitHub";
-        const size = asset ? " · " + formatBytes(asset.size) : "";
-        item.innerHTML =
-          '<div class="release-top"><strong>' + tag + badge + "</strong><span>" + date + size + "</span></div>" +
-          '<a href="' + href + '">' + label + "</a>" +
-          (release.body ? '<p class="notes"></p>' : "");
-        if (release.body) {
-          item.querySelector(".notes").textContent = release.body;
-        }
-        list.appendChild(item);
+      list.appendChild(releaseCard(latest));
+      console.log(
+        "SeenShot site: current release=" + version +
+          " previousFolded=" + previous.length +
+          " notesChars=" + ((latest.body && String(latest.body).trim().length) || 0)
+      );
+      if (previous.length === 0) {
+        console.log("SeenShot site: no previous releases to fold");
+        return;
+      }
+      const fold = document.createElement("details");
+      fold.className = "previous-releases";
+      const summary = document.createElement("summary");
+      summary.textContent = "Previous releases";
+      fold.appendChild(summary);
+      previous.forEach(function (release) {
+        fold.appendChild(releaseCard(release));
       });
+      fold.addEventListener("toggle", function () {
+        console.log(
+          "SeenShot site: previous releases open=" + fold.open +
+            " count=" + previous.length
+        );
+      });
+      list.appendChild(fold);
     }
 
     function showError(message) {
