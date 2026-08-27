@@ -1,14 +1,22 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>SeenShot</title>
-    <item>
-      <title>SeenShot 0.1.2</title>
-      <pubDate>Wed, 26 Aug 2026 12:47:02 +0000</pubDate>
-      <sparkle:version>0.1.2</sparkle:version>
-      <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/alxgntv/seenshot/releases/download/v0.1.2/SeenShot-0.1.2-arm64.dmg" length="39082658" type="application/octet-stream" sparkle:edSignature="+YSSwtIoZF7ze4P4+yP4eTCziHoq+HSG8vRgEhMlq+K4MVSEEQqF0z+iCEP0XcT5B5oiQtU8Mm8GSbNoqj34Dw==" />
-    </item>
-  </channel>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>SeenShot</title>
+        <item>
+            <title>0.1.3</title>
+            <pubDate>Thu, 27 Aug 2026 12:40:03 +0300</pubDate>
+            <sparkle:version>0.1.3</sparkle:version>
+            <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/alxgntv/seenshot/releases/download/v0.1.3/SeenShot-0.1.3-arm64.dmg" length="37253928" type="application/octet-stream" sparkle:edSignature="iswVYONHV1Vl0wO8Bf56jjvT/Ftrbt4v436NZRNgqb6wW2cntsouVtDv5Nx3AJ/d8TD4O735r3sIMHme5MlGCw=="/>
+        </item>
+        <item>
+            <title>SeenShot 0.1.2</title>
+            <pubDate>Wed, 26 Aug 2026 12:47:02 +0000</pubDate>
+            <sparkle:version>0.1.2</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/alxgntv/seenshot/releases/download/v0.1.2/SeenShot-0.1.2-arm64.dmg" length="39082658" type="application/octet-stream" sparkle:edSignature="+YSSwtIoZF7ze4P4+yP4eTCziHoq+HSG8vRgEhMlq+K4MVSEEQqF0z+iCEP0XcT5B5oiQtU8Mm8GSbNoqj34Dw=="/>
+        </item>
+    </channel>
 </rss>
