@@ -48,7 +48,7 @@ private:
     bool finishTokens(const FirebaseTokens &tokens, const QString &method, QString *errorCode);
     bool fillEmailIfNeeded(FirebaseTokens *tokens, QString *errorCode);
     bool persistPendingPkce(const QString &verifier, const QString &state, QString *errorCode);
-    bool takePendingPkce(QString *verifier, QString *state, QString *errorCode);
+    bool loadPendingPkce(QString *verifier, QString *state, QString *errorCode);
     void clearPendingPkce();
     bool exchangeAuthorizationCode(const QString &code, const QString &verifier, QString *customToken,
                                    QString *errorCode);

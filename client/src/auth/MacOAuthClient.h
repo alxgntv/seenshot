@@ -4,11 +4,11 @@
 #include <QString>
 #include <QUrl>
 
-// ─── Ariadne's Thread [AT-0191] ─────────────────────
-// What: ASWebAuthenticationSession client for seenshot.app PKCE
-// Why:  Official macOS OAuth API for native apps; callback scheme seenshot
+// ─── Ariadne's Thread [AT-0201] ─────────────────────
+// What: Open the OAuth authorize URL in the user's default browser
+// Why:  ASWebAuthenticationSession always uses Safari, not the default HTTP handler
 // Date: 2026-08-27
-// Related: [AT-0193] AuthSession.cpp:startWebsiteSignIn, [AT-0040] seenshot-web→src/oauth.ts
+// Related: [AT-0193] AuthSession.cpp:startWebsiteSignIn, [AT-0191] MacOAuthClient.mm
 // ─────────────────────────────────────────────────────
 class MacOAuthClient : public QObject {
     Q_OBJECT
@@ -24,7 +24,8 @@ signals:
 
 private slots:
     void finishFromBrowser(const QUrl &callbackUrl, const QString &errorCode);
+    void onWorkspaceOpenCompleted(int generation, bool ok, const QString &bundleId, const QString &errorText);
 
 private:
-    void *m_native = nullptr;
+    int m_openGeneration = 0;
 };

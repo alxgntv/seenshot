@@ -3,7 +3,6 @@
 #include "annotate/AnnotationCommands.h"
 #include "app/Analytics.h"
 #include "app/MacIcons.h"
-#include "app/SignInDialog.h"
 #include "app/MacPermissions.h"
 #include "camera/CameraCapture.h"
 #include "camera/PersonCutout.h"
@@ -352,6 +351,14 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
 {
     qInfo() << "AnnotateWindow: constructed fileId=" << m_fileId;
     setWindowTitle(QStringLiteral("SeenShot — Annotate"));
+    // ─── Ariadne's Thread [AT-0202] ─────────────────────
+    // What: Annotate window does not participate in last-window-closed quit
+    // Why:  Qt 6.11 ties WA_QuitOnClose to lastWindowClosed; the agent must stay in the tray
+    // Date: 2026-08-27
+    // Related: [AT-0204] Application.cpp:eventFilter, client/src/main.cpp
+    // ─────────────────────────────────────────────────────
+    setAttribute(Qt::WA_QuitOnClose, false);
+    qInfo() << "AnnotateWindow: WA_QuitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
     m_scene = new QGraphicsScene(this);
     m_background = new QGraphicsRectItem();
     m_background->setZValue(-2);
@@ -773,6 +780,12 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_shareProgress->hide();
     connect(saveBtn, &QPushButton::clicked, this, &AnnotateWindow::saveLocal);
     connect(m_shareBtn, &QPushButton::clicked, this, &AnnotateWindow::share);
+    if (m_auth) {
+        connect(m_auth, &AuthSession::websiteSignInSettled, this, &AnnotateWindow::onWebsiteSignInSettled);
+        qInfo() << "AnnotateWindow: connected websiteSignInSettled";
+    } else {
+        qWarning() << "AnnotateWindow: no AuthSession, Share cannot start website sign-in";
+    }
     toolbar->addWidget(saveBtn);
     toolbar->addWidget(m_shareProgress);
     toolbar->addWidget(m_shareBtn);
@@ -854,9 +867,22 @@ void AnnotateWindow::closeEvent(QCloseEvent *event)
         event->ignore();
         return;
     }
-    qInfo() << "AnnotateWindow: close, commit text if needed";
-    abortPhotoCycle();
+    qInfo() << "AnnotateWindow: close, stop photo without destroying Tool QWindow"
+            << " quitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
+    abortPhotoCycle(true, false);
     commitTextEdit();
+    // ─── Ariadne's Thread [AT-0207] ─────────────────────
+    // What: Disconnect QUndoStack before the widget tree is torn down
+    // Why:  ~QUndoStack emits indexChanged after QWidget children are gone; selectedAnnotation SIGSEGV
+    // Date: 2026-08-27
+    // Related: [AT-0203] AnnotateWindow.cpp:abortPhotoCycle, [AT-0204] Application.cpp:eventFilter
+    // ─────────────────────────────────────────────────────
+    if (m_undo) {
+        m_undo->disconnect(this);
+        m_undo->blockSignals(true);
+        qInfo() << "AnnotateWindow: undo disconnected before close index=" << m_undo->index()
+                << " count=" << m_undo->count();
+    }
     if (SparkleUpdater *updater = SparkleUpdater::instance()) {
         updater->editorWillClose(this);
     }
@@ -1396,10 +1422,36 @@ void AnnotateWindow::share()
     }
     commitTextEdit();
     QString code;
-    if (!m_auth || !m_auth->hasSession()) {
+    // ─── Ariadne's Thread [AT-0199] ─────────────────────
+    // What: Share starts website sign-in and resumes after websiteSignInSettled
+    // Why:  No SignInDialog; same default-browser OAuth as Settings Sign In
+    // Date: 2026-08-27
+    // Related: [AT-0198] SettingsWindow.cpp:openSignIn, [AT-0193] AuthSession.cpp:startWebsiteSignIn
+    // ─────────────────────────────────────────────────────
+    if (!m_auth) {
+        qWarning() << "AnnotateWindow: share needs AuthSession";
+        showError(QStringLiteral("STORAGE_NEED_SIGN_IN"));
+        return;
+    }
+    if (!m_auth->hasSession()) {
         qInfo() << "AnnotateWindow: share needs sign-in";
-        if (!SignInDialog::execSignIn(m_auth, this)) {
-            qInfo() << "AnnotateWindow: share sign-in cancelled";
+        m_shareAfterSignIn = true;
+        QString error;
+        if (!m_auth->startWebsiteSignIn(&error)) {
+            if (error == QLatin1String("AUTH_IN_PROGRESS")) {
+                qInfo() << "AnnotateWindow: share waiting for in-progress website sign-in";
+                return;
+            }
+            m_shareAfterSignIn = false;
+            qWarning() << "AnnotateWindow: website sign-in start failed code=" << error;
+            showError(error.isEmpty() ? QStringLiteral("AUTH_OAUTH_FAILED") : error);
+            return;
+        }
+        if (m_auth->hasSession()) {
+            m_shareAfterSignIn = false;
+            qInfo() << "AnnotateWindow: session appeared before website browser";
+        } else {
+            qInfo() << "AnnotateWindow: website sign-in started for share";
             return;
         }
     }
@@ -1441,6 +1493,27 @@ void AnnotateWindow::share()
     qInfo() << "AnnotateWindow: published" << url;
     Analytics::instance().track(QStringLiteral("share"));
     showShareLink(url);
+}
+
+void AnnotateWindow::onWebsiteSignInSettled(const QString &errorCode)
+{
+    const bool pendingShare = m_shareAfterSignIn;
+    m_shareAfterSignIn = false;
+    const bool signedIn = m_auth && m_auth->hasSession();
+    qInfo() << "AnnotateWindow: website sign-in settled code=" << errorCode
+            << " pendingShare=" << pendingShare << " hasSession=" << signedIn;
+    if (!errorCode.isEmpty() && errorCode != QLatin1String("AUTH_OAUTH_DENIED")) {
+        showError(errorCode);
+        return;
+    }
+    if (errorCode == QLatin1String("AUTH_OAUTH_DENIED")) {
+        qInfo() << "AnnotateWindow: website sign-in canceled, share not resumed";
+        return;
+    }
+    if (pendingShare && signedIn) {
+        qInfo() << "AnnotateWindow: resume share after website sign-in";
+        share();
+    }
 }
 
 void AnnotateWindow::setShareBusy(bool busy)
@@ -2395,7 +2468,13 @@ void AnnotateWindow::abortPhoto()
     abortPhotoCycle();
 }
 
-void AnnotateWindow::abortPhotoCycle(bool notifyEnded)
+// ─── Ariadne's Thread [AT-0203] ─────────────────────
+// What: Stop camera/pip without QWindow::destroy while the editor is closing
+// Why:  Destroying the Tool NSWindow in closeEvent SIGSEGV in setNeedsDisplayInRect
+// Date: 2026-08-27
+// Related: [AT-0080] AnnotateWindow.cpp:m_photoOverlay, [AT-0202] AnnotateWindow.cpp:closeEvent
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::abortPhotoCycle(bool notifyEnded, bool destroyOverlayWindow)
 {
     const bool running = m_photoCycle || (m_camera && m_camera->isRunning()) || photoCaptureBusy();
     ++m_photoToken;
@@ -2407,11 +2486,12 @@ void AnnotateWindow::abortPhotoCycle(bool notifyEnded)
     }
     if (m_photoOverlay) {
         m_photoOverlay->hide();
-        if (QWindow *win = m_photoOverlay->windowHandle()) {
+        QWindow *win = m_photoOverlay->windowHandle();
+        qInfo() << "AnnotateWindow: photo Tool hide destroyNative=" << destroyOverlayWindow
+                << " hasQWindow=" << (win != nullptr) << " visible=" << m_photoOverlay->isVisible();
+        if (destroyOverlayWindow && win) {
             win->destroy();
             qInfo() << "AnnotateWindow: photo Tool QWindow destroyed";
-        } else {
-            qInfo() << "AnnotateWindow: photo Tool had no QWindow";
         }
     }
     if (m_photoFlash) {
@@ -2436,7 +2516,7 @@ void AnnotateWindow::abortPhotoCycle(bool notifyEnded)
     syncPhotoButtonChecked();
     if (running) {
         qInfo() << "AnnotateWindow: photo cycle aborted token=" << m_photoToken
-                << " notifyEnded=" << notifyEnded;
+                << " notifyEnded=" << notifyEnded << " destroyOverlayWindow=" << destroyOverlayWindow;
         if (notifyEnded) {
             emit photoCycleEnded();
         }

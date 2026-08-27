@@ -3,6 +3,7 @@
 #include "annotate/AnnotateWindow.h"
 #include "app/Analytics.h"
 #include "app/Config.h"
+#include "app/MacPermissions.h"
 #include "errors/ErrorCatalog.h"
 
 #include <QDebug>
@@ -156,6 +157,7 @@ static SparkleUpdater *g_instance = nullptr;
     (void)retryTerminatingApplication;
     qInfo() << "SparkleUpdater: installing terminated=" << applicationTerminated;
     if (SparkleUpdater *u = SparkleUpdater::instance()) {
+        MacPermissions::allowQuit("sparkle-installing");
         u->handleInstalling();
     }
 }
@@ -461,6 +463,13 @@ void SparkleUpdater::replyRelaunchInstall()
     m_readyToRelaunch = false;
     m_waitingInstall = false;
     qInfo() << "SparkleUpdater: replyRelaunchInstall";
+    // ─── Ariadne's Thread [AT-0206] ─────────────────────
+    // What: Mark Quit allowed before Sparkle replace-and-relaunch
+    // Why:  The agent otherwise ignores NSApp terminate after the editor is already closed
+    // Date: 2026-08-27
+    // Related: [AT-0205] MacPermissions.mm:allowQuit, [AT-0092] SparkleUpdater.mm
+    // ─────────────────────────────────────────────────────
+    MacPermissions::allowQuit("sparkle-relaunch");
     reply(SPUUserUpdateChoiceInstall);
 #endif
 }

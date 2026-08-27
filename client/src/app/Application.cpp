@@ -33,6 +33,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QUrl>
+#include <QWidget>
 
 Application::Application(QObject *parent)
     : QObject(parent)
@@ -72,7 +73,12 @@ void Application::start()
 {
     qInfo() << "Application: start firstRun=" << !LocalStore::firstRunCompleted()
             << " path=" << MacPermissions::runningAppPath();
+    qApp->setQuitOnLastWindowClosed(false);
     qApp->installEventFilter(this);
+    connect(qApp, &QGuiApplication::lastWindowClosed, this, []() {
+        qInfo() << "Application: lastWindowClosed agent stays running quitOnLastWindowClosed="
+                << qApp->quitOnLastWindowClosed();
+    });
     MacUrlHandler::install([this](const QUrl &url) {
         handleOpenUrl(url);
     });
@@ -234,10 +240,30 @@ void Application::showScreenRecordingHelp()
     qInfo() << "Application: Screen Recording help cancelled";
 }
 
+// ─── Ariadne's Thread [AT-0204] ─────────────────────
+// What: Ignore unsolicited QEvent::Quit from window close; accept tray/Cmd+Q/Sparkle
+// Why:  Closing AnnotateWindow must not kill the LSUIElement agent
+// Date: 2026-08-27
+// Related: [AT-0205] MacPermissions.mm:shouldAcceptApplicationQuit, [AT-0202] AnnotateWindow.cpp
+// ─────────────────────────────────────────────────────
 bool Application::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == qApp && event->type() == QEvent::Quit) {
-        qInfo() << "Application: Quit event, teardown windows first";
+        const bool accept = MacPermissions::shouldAcceptApplicationQuit();
+        qInfo() << "Application: Quit event accept=" << accept
+                << " quitOnLastWindowClosed=" << qApp->quitOnLastWindowClosed();
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            qInfo() << "Application: Quit topLevel class=" << w->metaObject()->className()
+                    << " visible=" << w->isVisible()
+                    << " quitOnClose=" << w->testAttribute(Qt::WA_QuitOnClose)
+                    << " flags=" << int(w->windowFlags());
+        }
+        if (!accept) {
+            qWarning() << "Application: ignore Quit so the menu-bar agent stays running";
+            event->ignore();
+            return true;
+        }
+        qInfo() << "Application: Quit accepted, teardown windows";
         teardownNativeWindows();
     }
     if (event->type() == QEvent::FileOpen) {
@@ -437,6 +463,13 @@ void Application::showAnnotate(const QImage &image)
     }
     m_editor = new AnnotateWindow(image, m_auth, m_cloud);
     m_editor->setAttribute(Qt::WA_DeleteOnClose);
+    m_editor->setAttribute(Qt::WA_QuitOnClose, false);
+    qApp->setQuitOnLastWindowClosed(false);
+    connect(m_editor, &QObject::destroyed, this, []() {
+        qInfo() << "Application: annotate window destroyed, agent still running";
+    });
+    qInfo() << "Application: annotate WA_QuitOnClose=" << m_editor->testAttribute(Qt::WA_QuitOnClose)
+            << " quitOnLastWindowClosed=" << qApp->quitOnLastWindowClosed();
     if (SparkleUpdater *updater = SparkleUpdater::instance()) {
         connect(m_editor, &AnnotateWindow::updateRequested, updater, &SparkleUpdater::userChoseUpdate);
         connect(m_editor, &AnnotateWindow::photoCycleEnded, updater, &SparkleUpdater::retryPendingInstall);
@@ -455,6 +488,9 @@ void Application::openSettings()
     if (!m_settings) {
         m_settings = new SettingsWindow(m_auth, m_cloud);
         m_settings->setAttribute(Qt::WA_DeleteOnClose);
+        m_settings->setAttribute(Qt::WA_QuitOnClose, false);
+        qInfo() << "Application: settings WA_QuitOnClose="
+                << m_settings->testAttribute(Qt::WA_QuitOnClose);
         connect(m_settings, &SettingsWindow::hotkeysChanged, this, &Application::applyHotkeys);
     }
     m_settings->show();
@@ -488,6 +524,7 @@ void Application::confirmQuit()
     if (SparkleUpdater *updater = SparkleUpdater::instance()) {
         updater->persistBeforeQuit();
     }
+    MacPermissions::allowQuit("tray");
     teardownNativeWindows();
     Analytics::instance().shutdown();
     qApp->quit();

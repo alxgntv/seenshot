@@ -1,53 +1,13 @@
 #include "auth/MacOAuthClient.h"
 
-#include "app/MacPermissions.h"
-
 #include <QDebug>
 #include <QMetaObject>
 #include <QString>
 #include <QUrl>
 
 #import <AppKit/AppKit.h>
-#import <AuthenticationServices/AuthenticationServices.h>
 #import <CommonCrypto/CommonDigest.h>
-#import <CoreFoundation/CoreFoundation.h>
 #import <Security/Security.h>
-
-@interface SeenShotOAuthNative : NSObject <ASWebAuthenticationPresentationContextProviding>
-@property (nonatomic, strong) ASWebAuthenticationSession *session;
-@property (nonatomic, strong) NSPanel *anchorPanel;
-@property (nonatomic, assign) MacOAuthClient *client;
-@end
-
-@implementation SeenShotOAuthNative
-
-- (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:(ASWebAuthenticationSession *)session
-{
-    (void)session;
-    NSWindow *key = [NSApp keyWindow];
-    if (key) {
-        qInfo() << "MacOAuthClient: presentation anchor keyWindow";
-        return key;
-    }
-    NSWindow *main = [NSApp mainWindow];
-    if (main) {
-        qInfo() << "MacOAuthClient: presentation anchor mainWindow";
-        return main;
-    }
-    if (!self.anchorPanel) {
-        self.anchorPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 1, 1)
-                                                     styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
-                                                       backing:NSBackingStoreBuffered
-                                                         defer:NO];
-        self.anchorPanel.releasedWhenClosed = NO;
-        [self.anchorPanel setFrameOrigin:NSMakePoint(-10000, -10000)];
-        [self.anchorPanel orderFrontRegardless];
-        qInfo() << "MacOAuthClient: presentation anchor created panel";
-    }
-    return self.anchorPanel;
-}
-
-@end
 
 namespace {
 
@@ -70,11 +30,6 @@ QByteArray randomBytes(int count, QString *errorCode)
     return out;
 }
 
-SeenShotOAuthNative *nativeFrom(void *ptr)
-{
-    return (__bridge SeenShotOAuthNative *)ptr;
-}
-
 } // namespace
 
 MacOAuthClient::MacOAuthClient(QObject *parent)
@@ -85,21 +40,8 @@ MacOAuthClient::MacOAuthClient(QObject *parent)
 
 MacOAuthClient::~MacOAuthClient()
 {
-    if (!m_native) {
-        return;
-    }
-    SeenShotOAuthNative *native = nativeFrom(m_native);
-    if (native.session) {
-        [native.session cancel];
-        qInfo() << "MacOAuthClient: cancelled session in destructor";
-    }
-    [native.anchorPanel close];
-    native.session = nil;
-    native.anchorPanel = nil;
-    native.client = nullptr;
-    CFRelease(m_native);
-    m_native = nullptr;
-    qInfo() << "MacOAuthClient: destroyed";
+    ++m_openGeneration;
+    qInfo() << "MacOAuthClient: destroyed generation=" << m_openGeneration;
 }
 
 bool MacOAuthClient::generatePkce(QString *verifier, QString *challenge, QString *state, QString *errorCode)
@@ -131,68 +73,54 @@ bool MacOAuthClient::start(const QUrl &authorizeUrl)
         qWarning() << "MacOAuthClient: empty authorize URL";
         return false;
     }
-    if (!m_native) {
-        SeenShotOAuthNative *created = [[SeenShotOAuthNative alloc] init];
-        created.client = this;
-        m_native = (void *)CFBridgingRetain(created);
-    }
-    SeenShotOAuthNative *native = nativeFrom(m_native);
-    if (native.session) {
-        qWarning() << "MacOAuthClient: session already running";
-        return false;
-    }
     NSURL *url = authorizeUrl.toNSURL();
     if (!url) {
         qWarning() << "MacOAuthClient: NSURL conversion failed";
         return false;
     }
-    MacPermissions::activateApp();
-    qInfo() << "MacOAuthClient: start host=" << authorizeUrl.host() << " path=" << authorizeUrl.path();
+    ++m_openGeneration;
+    const int generation = m_openGeneration;
+    qInfo() << "MacOAuthClient: open default browser generation=" << generation << " host=" << authorizeUrl.host()
+            << " path=" << authorizeUrl.path();
+    NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+    config.activates = YES;
     MacOAuthClient *client = this;
-    ASWebAuthenticationSession *session = [[ASWebAuthenticationSession alloc]
-        initWithURL:url
-        callbackURLScheme:@"seenshot"
-        completionHandler:^(NSURL *callbackURL, NSError *error) {
-            QUrl callback;
-            QString code;
-            if (error) {
-                const BOOL canceled =
-                    [error.domain isEqualToString:ASWebAuthenticationSessionErrorDomain] &&
-                    error.code == ASWebAuthenticationSessionErrorCodeCanceledLogin;
-                code = canceled ? QStringLiteral("AUTH_OAUTH_DENIED") : QStringLiteral("AUTH_OAUTH_FAILED");
-                qWarning() << "MacOAuthClient: session error canceled=" << canceled
-                           << " code=" << static_cast<int>(error.code);
-            } else if (callbackURL) {
-                callback = QUrl(QString::fromNSString(callbackURL.absoluteString));
-                qInfo() << "MacOAuthClient: session callback host=" << callback.host()
-                        << " hasQuery=" << !callback.query().isEmpty();
-            } else {
-                code = QStringLiteral("AUTH_OAUTH_FAILED");
-                qWarning() << "MacOAuthClient: session finished with no URL";
-            }
-            QMetaObject::invokeMethod(client, "finishFromBrowser", Qt::QueuedConnection, Q_ARG(QUrl, callback),
-                                      Q_ARG(QString, code));
-        }];
-    session.prefersEphemeralWebBrowserSession = NO;
-    session.presentationContextProvider = native;
-    native.session = session;
-    const BOOL started = [session start];
-    qInfo() << "MacOAuthClient: start returned=" << static_cast<bool>(started);
-    if (!started) {
-        native.session = nil;
-        return false;
-    }
+    [[NSWorkspace sharedWorkspace] openURL:url
+                             configuration:config
+                         completionHandler:^(NSRunningApplication *app, NSError *error) {
+                             const bool ok = (error == nil);
+                             const QString bundle = app.bundleIdentifier
+                                 ? QString::fromNSString(app.bundleIdentifier)
+                                 : QString();
+                             const QString errText = error
+                                 ? QString::fromNSString(error.localizedDescription)
+                                 : QString();
+                             qInfo() << "MacOAuthClient: NSWorkspace completion generation=" << generation
+                                     << " ok=" << ok << " bundle=" << bundle;
+                             QMetaObject::invokeMethod(client, "onWorkspaceOpenCompleted", Qt::QueuedConnection,
+                                                       Q_ARG(int, generation), Q_ARG(bool, ok), Q_ARG(QString, bundle),
+                                                       Q_ARG(QString, errText));
+                         }];
     return true;
+}
+
+void MacOAuthClient::onWorkspaceOpenCompleted(int generation, bool ok, const QString &bundleId, const QString &errorText)
+{
+    if (generation != m_openGeneration) {
+        qInfo() << "MacOAuthClient: ignore stale open result generation=" << generation
+                << " current=" << m_openGeneration;
+        return;
+    }
+    if (!ok) {
+        qWarning() << "MacOAuthClient: NSWorkspace open failed" << errorText;
+        finishFromBrowser(QUrl(), QStringLiteral("AUTH_OAUTH_FAILED"));
+        return;
+    }
+    qInfo() << "MacOAuthClient: default browser opened bundle=" << bundleId;
 }
 
 void MacOAuthClient::finishFromBrowser(const QUrl &callbackUrl, const QString &errorCode)
 {
-    SeenShotOAuthNative *native = nativeFrom(m_native);
-    if (native) {
-        native.session = nil;
-        [native.anchorPanel close];
-        native.anchorPanel = nil;
-    }
     qInfo() << "MacOAuthClient: finishFromBrowser error=" << errorCode << " hasCallback=" << !callbackUrl.isEmpty();
     emit finished(callbackUrl, errorCode);
 }

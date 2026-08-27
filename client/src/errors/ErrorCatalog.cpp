@@ -94,7 +94,7 @@ QString ErrorCatalog::message(const QString &code)
         {QStringLiteral("AUTH_OAUTH_FAILED"),
          QStringLiteral("Could not sign in with seenshot.app. Try again.")},
         {QStringLiteral("AUTH_OAUTH_STATE"),
-         QStringLiteral("Could not finish sign-in. Try Continue on seenshot.app again.")},
+         QStringLiteral("Could not finish sign-in. Click Sign In again.")},
         {QStringLiteral("LOGIN_ITEM_FAILED"),
          QStringLiteral("Could not change Open at login. Check Login Items in System Settings.")},
         {QStringLiteral("AUTH_CHECK_EMAIL"), QStringLiteral("Check your email to continue.")},

@@ -397,15 +397,14 @@ void AuthSession::clearPendingPkce()
     qInfo() << "AuthSession: pending PKCE cleared";
 }
 
-bool AuthSession::takePendingPkce(QString *verifier, QString *state, QString *errorCode)
+bool AuthSession::loadPendingPkce(QString *verifier, QString *state, QString *errorCode)
 {
     QString error;
     const QByteArray rawVerifier = m_store->read(QString::fromLatin1(kOauthVerifierKey), &error);
     const QByteArray rawState = m_store->read(QString::fromLatin1(kOauthStateKey), &error);
     const QByteArray rawCreated = m_store->read(QString::fromLatin1(kOauthCreatedKey), &error);
-    clearPendingPkce();
     if (rawVerifier.isEmpty() || rawState.isEmpty()) {
-        qInfo() << "AuthSession: takePendingPkce empty";
+        qInfo() << "AuthSession: loadPendingPkce empty";
         if (errorCode) {
             *errorCode = QString();
         }
@@ -415,6 +414,7 @@ bool AuthSession::takePendingPkce(QString *verifier, QString *state, QString *er
     const qint64 age = QDateTime::currentMSecsSinceEpoch() - created;
     if (created <= 0 || age > kOauthPendingTtlMs) {
         qWarning() << "AuthSession: pending PKCE expired ageMs=" << age;
+        clearPendingPkce();
         if (errorCode) {
             *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
         }
@@ -422,7 +422,7 @@ bool AuthSession::takePendingPkce(QString *verifier, QString *state, QString *er
     }
     *verifier = QString::fromUtf8(rawVerifier);
     *state = QString::fromUtf8(rawState);
-    qInfo() << "AuthSession: takePendingPkce ok ageMs=" << age << " stateChars=" << state->size();
+    qInfo() << "AuthSession: loadPendingPkce ok ageMs=" << age << " stateChars=" << state->size();
     return true;
 }
 
@@ -485,7 +485,7 @@ bool AuthSession::exchangeAuthorizationCode(const QString &code, const QString &
 // What: Start seenshot.app Authorization Code + PKCE and finish AuthSession
 // Why:  Mac public client; Firebase session persists until Sign Out
 // Date: 2026-08-27
-// Related: [AT-0191] MacOAuthClient.mm, [AT-0192] FirebaseAuthClient.cpp:signInWithCustomToken
+    // Related: [AT-0201] MacOAuthClient.mm:start, [AT-0192] FirebaseAuthClient.cpp:signInWithCustomToken
 // ─────────────────────────────────────────────────────
 bool AuthSession::startWebsiteSignIn(QString *errorCode)
 {
@@ -518,7 +518,7 @@ bool AuthSession::startWebsiteSignIn(QString *errorCode)
     query.addQueryItem(QStringLiteral("state"), state);
     url.setQuery(query);
     if (!m_oauth->start(url)) {
-        qWarning() << "AuthSession: ASWebAuthenticationSession failed to start";
+        qWarning() << "AuthSession: NSWorkspace failed to open authorize URL";
         clearPendingPkce();
         endAuth();
         if (errorCode) {
@@ -526,7 +526,8 @@ bool AuthSession::startWebsiteSignIn(QString *errorCode)
         }
         return false;
     }
-    qInfo() << "AuthSession: website sign-in browser started";
+    endAuth();
+    qInfo() << "AuthSession: website sign-in opened default browser";
     return true;
 }
 
@@ -534,22 +535,55 @@ void AuthSession::onOAuthBrowserFinished(const QUrl &callbackUrl, const QString 
 {
     qInfo() << "AuthSession: onOAuthBrowserFinished error=" << errorCode
             << " hasCallback=" << !callbackUrl.isEmpty();
-    if (!errorCode.isEmpty() && callbackUrl.isEmpty()) {
-        clearPendingPkce();
-        endAuth();
-        emit websiteSignInSettled(errorCode);
+    if (errorCode.isEmpty() || !callbackUrl.isEmpty()) {
+        qInfo() << "AuthSession: onOAuthBrowserFinished ignored, callback is seenshot://";
         return;
     }
-    QString localError;
-    if (!completeWebsiteCallback(callbackUrl, &localError)) {
-        qWarning() << "AuthSession: website callback failed code=" << localError;
-    }
+    clearPendingPkce();
+    endAuth();
+    emit websiteSignInSettled(errorCode);
 }
 
 bool AuthSession::completeWebsiteCallback(const QUrl &url, QString *errorCode)
 {
     qInfo() << "AuthSession: completeWebsiteCallback scheme=" << url.scheme() << " host=" << url.host();
+    if (!beginAuth(errorCode)) {
+        qInfo() << "AuthSession: oauth callback ignored, auth busy";
+        if (errorCode) {
+            *errorCode = QString();
+        }
+        return true;
+    }
     const QUrlQuery query(url);
+    QString verifier;
+    QString state;
+    QString loadError;
+    if (!loadPendingPkce(&verifier, &state, &loadError)) {
+        endAuth();
+        if (loadError.isEmpty()) {
+            qInfo() << "AuthSession: oauth callback ignored, no pending PKCE";
+            if (errorCode) {
+                *errorCode = QString();
+            }
+            return true;
+        }
+        qWarning() << "AuthSession: pending PKCE unusable code=" << loadError;
+        if (errorCode) {
+            *errorCode = loadError;
+        }
+        emit websiteSignInSettled(loadError);
+        return false;
+    }
+    const QString returnedState = query.queryItemValue(QStringLiteral("state"));
+    if (returnedState != state) {
+        endAuth();
+        qInfo() << "AuthSession: oauth callback ignored, stale state returnedChars=" << returnedState.size()
+                << " expectedChars=" << state.size();
+        if (errorCode) {
+            *errorCode = QString();
+        }
+        return true;
+    }
     const QString oauthError = query.queryItemValue(QStringLiteral("error"));
     if (oauthError == QLatin1String("access_denied")) {
         qInfo() << "AuthSession: oauth access_denied";
@@ -561,36 +595,7 @@ bool AuthSession::completeWebsiteCallback(const QUrl &url, QString *errorCode)
         emit websiteSignInSettled(QStringLiteral("AUTH_OAUTH_DENIED"));
         return false;
     }
-    QString verifier;
-    QString state;
-    QString takeError;
-    if (!takePendingPkce(&verifier, &state, &takeError)) {
-        if (takeError.isEmpty()) {
-            qInfo() << "AuthSession: oauth callback ignored, no pending PKCE";
-            if (errorCode) {
-                *errorCode = QString();
-            }
-            return true;
-        }
-        qWarning() << "AuthSession: pending PKCE unusable code=" << takeError;
-        endAuth();
-        if (errorCode) {
-            *errorCode = takeError;
-        }
-        emit websiteSignInSettled(takeError);
-        return false;
-    }
-    const QString returnedState = query.queryItemValue(QStringLiteral("state"));
-    if (returnedState != state) {
-        qWarning() << "AuthSession: oauth state mismatch returnedChars=" << returnedState.size()
-                   << " expectedChars=" << state.size();
-        endAuth();
-        if (errorCode) {
-            *errorCode = QStringLiteral("AUTH_OAUTH_STATE");
-        }
-        emit websiteSignInSettled(QStringLiteral("AUTH_OAUTH_STATE"));
-        return false;
-    }
+    clearPendingPkce();
     const QString code = query.queryItemValue(QStringLiteral("code"));
     if (code.isEmpty()) {
         qWarning() << "AuthSession: oauth callback missing code";

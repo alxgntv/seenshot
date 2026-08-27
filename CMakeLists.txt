@@ -33,8 +33,6 @@ set(SEENSHOT_SOURCES
     client/src/app/TrayController.cpp
     client/src/app/FirstRunWizard.cpp
     client/src/app/SettingsWindow.cpp
-    client/src/app/AccountSignInPanel.cpp
-    client/src/app/SignInDialog.cpp
     client/src/app/Logger.cpp
     client/src/app/Config.cpp
     client/src/app/MacPermissions.mm
@@ -101,7 +99,6 @@ target_link_libraries(SeenShot PRIVATE
     "-framework CoreVideo"
     "-framework CoreMedia"
     "-framework QuartzCore"
-    "-framework AuthenticationServices"
 )
 
 set_target_properties(SeenShot PROPERTIES

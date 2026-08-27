@@ -8,6 +8,10 @@
 #include <atomic>
 #include <memory>
 
+namespace {
+std::atomic<bool> g_quitAllowed{false};
+}
+
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -289,9 +293,60 @@ void MacPermissions::relaunchApp()
                                                           << (app != nil ? static_cast<int>(app.processIdentifier)
                                                                          : 0);
                                               }
+                                              MacPermissions::allowQuit("relaunch");
                                               qApp->quit();
                                           });
                                       }];
+}
+
+// ─── Ariadne's Thread [AT-0205] ─────────────────────
+// What: Gate application quit on an explicit allow flag, Cmd+Q, or non-Qt menu click
+// Why:  Mouse-up on the editor close button must not be treated as Quit
+// Date: 2026-08-27
+// Related: [AT-0204] Application.cpp:eventFilter, [AT-0172] MacPermissions.mm:relaunchApp
+// ─────────────────────────────────────────────────────
+void MacPermissions::allowQuit(const char *reason)
+{
+    g_quitAllowed.store(true, std::memory_order_release);
+    qInfo() << "MacPermissions: allowQuit reason=" << (reason ? reason : "(null)");
+}
+
+bool MacPermissions::shouldAcceptApplicationQuit()
+{
+    if (g_quitAllowed.load(std::memory_order_acquire)) {
+        qInfo() << "MacPermissions: shouldAcceptApplicationQuit flag=true";
+        return true;
+    }
+    NSEvent *ev = [NSApp currentEvent];
+    if (ev == nil) {
+        qInfo() << "MacPermissions: shouldAcceptApplicationQuit no NSEvent, reject";
+        return false;
+    }
+    if (ev.type == NSEventTypeKeyDown) {
+        const NSEventModifierFlags mods =
+            ev.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+        const bool command = (mods & NSEventModifierFlagCommand) != 0;
+        NSString *chars = ev.charactersIgnoringModifiers.lowercaseString;
+        const bool qKey = [chars isEqualToString:@"q"];
+        qInfo() << "MacPermissions: shouldAcceptApplicationQuit keyDown command=" << command
+                << " q=" << qKey;
+        return command && qKey;
+    }
+    NSWindow *win = ev.window;
+    NSString *cls = win ? NSStringFromClass([win class]) : @"(nil)";
+    Class qnsWindow = NSClassFromString(@"QNSWindow");
+    Class qnsPanel = NSClassFromString(@"QNSPanel");
+    const bool qtWindow = (win != nil) && ((qnsWindow && [win isKindOfClass:qnsWindow])
+                                           || (qnsPanel && [win isKindOfClass:qnsPanel]));
+    const bool mouse = ev.type == NSEventTypeLeftMouseDown || ev.type == NSEventTypeLeftMouseUp
+                       || ev.type == NSEventTypeRightMouseDown || ev.type == NSEventTypeRightMouseUp;
+    qInfo() << "MacPermissions: shouldAcceptApplicationQuit eventType=" << static_cast<int>(ev.type)
+            << " windowClass=" << QString::fromNSString(cls) << " qtWindow=" << qtWindow
+            << " mouse=" << mouse;
+    if (qtWindow) {
+        return false;
+    }
+    return mouse;
 }
 
 void MacPermissions::openCameraSettings()

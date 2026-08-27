@@ -56,7 +56,7 @@ Signed in — profile:
 - Plan + cloud used, same `CloudClient::fetchQuota` as today.
 - Sign Out, Upgrade to Pro, Export my data, Delete account. Same `CloudClient` methods. Do not add a second checkout / export / delete path.
 
-Local Save without an account stays. Share Link while signed out opens a modal with the same sign-in form (`AccountSignInPanel`) and the English line **Sign in to share links.** After a session exists, Share continues. Closing the modal does not share. Offline after sign-in still uses `OFFLINE_CLOUD_UNAVAILABLE`.
+Local Save without an account stays. Share Link while signed out starts website sign-in immediately (`AuthSession::startWebsiteSignIn`). After a session exists, Share continues. Cancel in the system browser does not share. Offline after sign-in still uses `OFFLINE_CLOUD_UNAVAILABLE`.
 
 ---
 

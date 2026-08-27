@@ -102,6 +102,7 @@ private slots:
     void redo();
     void saveLocal();
     void share();
+    void onWebsiteSignInSettled(const QString &errorCode);
     void setToolSelect();
     void setToolHighlight();
     void setToolArrow();
@@ -183,7 +184,7 @@ private:
     void beginPhotoFlashCapture();
     void finishPhotoStill(const QImage &image);
     bool photoCaptureBusy() const;
-    void abortPhotoCycle(bool notifyEnded = true);
+    void abortPhotoCycle(bool notifyEnded = true, bool destroyOverlayWindow = true);
     void syncPhotoButtonChecked();
     void setPhotoPipSelected(bool selected);
     void movePhotoOverlayToGlobal(const QPoint &globalTopLeft);
@@ -343,4 +344,5 @@ private:
     QProgressBar *m_shareBusy = nullptr;
     QProgressBar *m_shareProgress = nullptr;
     bool m_shareUploading = false;
+    bool m_shareAfterSignIn = false;
 };

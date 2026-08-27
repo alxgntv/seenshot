@@ -23,6 +23,7 @@ protected:
 
 private slots:
     void openSignIn();
+    void onWebsiteSignInSettled(const QString &errorCode);
     void signOut();
     void exportData();
     void deleteAccount();
@@ -52,4 +53,5 @@ private:
     QPushButton *m_deleteBtn = nullptr;
     QLabel *m_version = nullptr;
     bool m_syncingLaunch = false;
+    bool m_websiteSignInBusy = false;
 };

@@ -10,6 +10,8 @@ FirstRunWizard::FirstRunWizard(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(QStringLiteral("SeenShot Setup"));
+    setAttribute(Qt::WA_QuitOnClose, false);
+    qInfo() << "FirstRunWizard: WA_QuitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(new QLabel(QStringLiteral(
         "macOS already uses Cmd+Shift+3, Cmd+Shift+4, and Cmd+Shift+5 for screenshots.\n"

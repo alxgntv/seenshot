@@ -16,12 +16,14 @@ RegionPicker::RegionPicker(QWidget *parent)
     setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
+    setAttribute(Qt::WA_QuitOnClose, false);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setCursor(Qt::CrossCursor);
     setGeometry(screenUnion());
     qInfo() << "RegionPicker: overlay geometry" << geometry() << " screens=" << QGuiApplication::screens().size()
-            << " alwaysShowTool=" << testAttribute(Qt::WA_MacAlwaysShowToolWindow);
+            << " alwaysShowTool=" << testAttribute(Qt::WA_MacAlwaysShowToolWindow)
+            << " quitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
 }
 
 QRect RegionPicker::screenUnion() const

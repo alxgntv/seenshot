@@ -1,7 +1,6 @@
 #include "app/SettingsWindow.h"
 
 #include "app/MacLoginItem.h"
-#include "app/SignInDialog.h"
 #include "auth/AuthSession.h"
 #include "cloud/CloudClient.h"
 #include "errors/ErrorCatalog.h"
@@ -35,6 +34,14 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     , m_cloud(cloud)
 {
     setWindowTitle(QStringLiteral("SeenShot Settings"));
+    // ─── Ariadne's Thread [AT-0202] ─────────────────────
+    // What: Settings does not participate in last-window-closed quit
+    // Why:  Closing Settings must leave the menu-bar agent running
+    // Date: 2026-08-27
+    // Related: [AT-0204] Application.cpp:eventFilter, [AT-0085] SettingsWindow.cpp
+    // ─────────────────────────────────────────────────────
+    setAttribute(Qt::WA_QuitOnClose, false);
+    qInfo() << "SettingsWindow: WA_QuitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(20, 18, 20, 18);
     layout->setSpacing(16);
@@ -72,11 +79,11 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     connect(m_launchAtLogin, &QCheckBox::toggled, this, &SettingsWindow::onLaunchAtLoginToggled);
     layout->addWidget(capture);
 
-    // ─── Ariadne's Thread [AT-0147] ─────────────────────
-    // What: Settings Account signed-out only opens SignInDialog
-    // Why:  Login form lives in one modal, not inside Settings
-    // Date: 2026-08-26
-    // Related: [AT-0110] SignInDialog.cpp, [AT-0085] SettingsWindow.cpp
+    // ─── Ariadne's Thread [AT-0198] ─────────────────────
+    // What: Settings Sign In opens seenshot.app in the default browser
+    // Why:  No intermediate Qt dialog; NSWorkspace uses the user's HTTP handler
+    // Date: 2026-08-27
+    // Related: [AT-0193] AuthSession.cpp:startWebsiteSignIn, [AT-0085] SettingsWindow.cpp
     // ─────────────────────────────────────────────────────
     m_signedOutBox = new QGroupBox(QStringLiteral("Account"), this);
     auto *outLayout = new QVBoxLayout(m_signedOutBox);
@@ -105,6 +112,7 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     layout->addWidget(m_signedInBox);
 
     connect(m_signInBtn, &QPushButton::clicked, this, &SettingsWindow::openSignIn);
+    connect(m_auth, &AuthSession::websiteSignInSettled, this, &SettingsWindow::onWebsiteSignInSettled);
     connect(m_signOutBtn, &QPushButton::clicked, this, &SettingsWindow::signOut);
     connect(m_exportBtn, &QPushButton::clicked, this, &SettingsWindow::exportData);
     connect(m_deleteBtn, &QPushButton::clicked, this, &SettingsWindow::deleteAccount);
@@ -125,7 +133,7 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     // What: Show the running app version on Settings
     // Why:  User must see which build is installed
     // Date: 2026-08-26
-    // Related: [AT-0123] SignInDialog.cpp, client/src/main.cpp
+    // Related: [AT-0198] SettingsWindow.cpp:openSignIn, client/src/main.cpp
     // ─────────────────────────────────────────────────────
     const QString version = QApplication::applicationVersion();
     m_version = new QLabel(QStringLiteral("Version %1").arg(version), this);
@@ -220,8 +228,9 @@ void SettingsWindow::updateAccountUi()
     m_signedOutBox->setVisible(!in);
     m_signedInBox->setVisible(in);
     if (!in) {
+        m_signInBtn->setEnabled(!m_websiteSignInBusy);
         adjustSize();
-        qInfo() << "SettingsWindow: show signed-out account";
+        qInfo() << "SettingsWindow: show signed-out account busy=" << m_websiteSignInBusy;
         return;
     }
     QString text = QStringLiteral("Signed in as %1").arg(m_auth->email().isEmpty() ? m_auth->uid() : m_auth->email());
@@ -267,12 +276,53 @@ void SettingsWindow::showAuthError(const QString &code)
 
 void SettingsWindow::openSignIn()
 {
-    qInfo() << "SettingsWindow: openSignIn hasSession=" << m_auth->hasSession();
-    if (SignInDialog::execSignIn(m_auth, this)) {
-        qInfo() << "SettingsWindow: sign-in accepted";
+    qInfo() << "SettingsWindow: openSignIn hasSession=" << m_auth->hasSession()
+            << " busy=" << m_websiteSignInBusy;
+    if (!m_auth || m_auth->hasSession()) {
+        qInfo() << "SettingsWindow: openSignIn skipped";
         return;
     }
-    qInfo() << "SettingsWindow: sign-in cancelled";
+    m_websiteSignInBusy = true;
+    m_signInBtn->setEnabled(false);
+    QString error;
+    if (!m_auth->startWebsiteSignIn(&error)) {
+        if (error == QLatin1String("AUTH_IN_PROGRESS")) {
+            qInfo() << "SettingsWindow: website sign-in already in progress";
+            return;
+        }
+        m_websiteSignInBusy = false;
+        m_signInBtn->setEnabled(true);
+        qWarning() << "SettingsWindow: website sign-in start failed code=" << error;
+        showAuthError(error.isEmpty() ? QStringLiteral("AUTH_OAUTH_FAILED") : error);
+        return;
+    }
+    if (m_auth->hasSession()) {
+        m_websiteSignInBusy = false;
+        m_signInBtn->setEnabled(false);
+        qInfo() << "SettingsWindow: website sign-in skipped, already signed in";
+        return;
+    }
+    m_websiteSignInBusy = false;
+    m_signInBtn->setEnabled(true);
+    qInfo() << "SettingsWindow: website sign-in started in default browser";
+}
+
+void SettingsWindow::onWebsiteSignInSettled(const QString &errorCode)
+{
+    m_websiteSignInBusy = false;
+    if (m_signInBtn) {
+        m_signInBtn->setEnabled(!m_auth->hasSession());
+    }
+    if (errorCode.isEmpty()) {
+        qInfo() << "SettingsWindow: website sign-in settled ok hasSession=" << m_auth->hasSession();
+        return;
+    }
+    if (errorCode == QLatin1String("AUTH_OAUTH_DENIED")) {
+        qInfo() << "SettingsWindow: website sign-in canceled";
+        return;
+    }
+    qWarning() << "SettingsWindow: website sign-in failed code=" << errorCode;
+    showAuthError(errorCode);
 }
 
 void SettingsWindow::signOut()
