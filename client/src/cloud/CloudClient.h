@@ -43,6 +43,7 @@ private:
     bool presignAndPut(const QByteArray &png, const QString &fileId, QString *shotId, QString *errorCode,
                        const CloudUploadProgress &progress = {});
     bool confirm(const QString &shotId, bool publish, CloudConfirmResult *result, QString *errorCode);
+    void postUploadProgress(const QString &shotId, qint64 sent, qint64 total, bool done);
 
     AuthSession *m_auth = nullptr;
     QNetworkAccessManager *m_nam = nullptr;

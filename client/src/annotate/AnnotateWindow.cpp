@@ -36,7 +36,9 @@
 #include <QSize>
 #include <QDebug>
 #include <QEvent>
+#include <QFile>
 #include <QFileDialog>
+#include <QIODevice>
 #include <QFrame>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -1389,13 +1391,48 @@ void AnnotateWindow::saveLocal()
         return;
     }
     qInfo() << "AnnotateWindow: local save chosen" << path;
-    const QImage image = exportedImage();
-    if (!image.save(path, "PNG")) {
-        qWarning() << "AnnotateWindow: local save failed" << path;
+    // ─── Ariadne's Thread [AT-0215] ─────────────────────
+    // What: Write Save PNG from CloudPngEncoder::encode via QFile
+    // Why:  Same bytes as Share PUT; QImage::save used a second encoder
+    // Date: 2026-08-27
+    // Related: [AT-0214] CloudPngEncoder.cpp:encode, [AT-0057] AnnotateWindow.cpp:share
+    // ─────────────────────────────────────────────────────
+    QString encodeCode;
+    const QByteArray png = CloudPngEncoder::encode(exportedImage(), &encodeCode);
+    if (png.isEmpty()) {
+        qWarning() << "AnnotateWindow: local save encode failed path=" << path
+                   << " encodeCode=" << encodeCode << " fileId=" << m_fileId;
+        showError(encodeCode.isEmpty() ? QStringLiteral("LOCAL_SAVE_FAILED") : encodeCode);
+        return;
+    }
+    qInfo() << "AnnotateWindow: local save encode ok path=" << path << " pngBytes=" << png.size()
+            << " fileId=" << m_fileId;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qWarning() << "AnnotateWindow: local save open failed path=" << path
+                   << " error=" << file.errorString() << " pngBytes=" << png.size();
         showError(QStringLiteral("LOCAL_SAVE_FAILED"));
         return;
     }
-    qInfo() << "AnnotateWindow: saved local" << path;
+    const qint64 written = file.write(png);
+    if (written != png.size()) {
+        qWarning() << "AnnotateWindow: local save write failed path=" << path
+                   << " written=" << written << " expected=" << png.size()
+                   << " error=" << file.errorString();
+        file.close();
+        showError(QStringLiteral("LOCAL_SAVE_FAILED"));
+        return;
+    }
+    if (!file.flush()) {
+        qWarning() << "AnnotateWindow: local save flush failed path=" << path
+                   << " error=" << file.errorString() << " pngBytes=" << png.size();
+        file.close();
+        showError(QStringLiteral("LOCAL_SAVE_FAILED"));
+        return;
+    }
+    file.close();
+    qInfo() << "AnnotateWindow: saved local path=" << path << " pngBytes=" << png.size()
+            << " fileId=" << m_fileId;
     Analytics::instance().track(QStringLiteral("save"));
     statusBar()->showMessage(QStringLiteral("Saved ") + path, 4000);
 }

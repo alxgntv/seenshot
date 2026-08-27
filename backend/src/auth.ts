@@ -12,7 +12,12 @@ const JWKS = createRemoteJWKSet(
   new URL("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"),
 );
 
-export async function verifyFirebaseToken(authHeader: string | null, projectId: string): Promise<string> {
+export type FirebaseUser = {
+  uid: string;
+  email: string;
+};
+
+export async function verifyFirebaseUser(authHeader: string | null, projectId: string): Promise<FirebaseUser> {
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     console.warn("auth: missing bearer header");
     throw new Error("STORAGE_NEED_SIGN_IN");
@@ -39,5 +44,10 @@ export async function verifyFirebaseToken(authHeader: string | null, projectId: 
     console.warn(`auth: disposable email uid=${uid} emailChars=${email.length}`);
     throw new Error("AUTH_DISPOSABLE_EMAIL");
   }
-  return uid;
+  return { uid, email };
+}
+
+export async function verifyFirebaseToken(authHeader: string | null, projectId: string): Promise<string> {
+  const user = await verifyFirebaseUser(authHeader, projectId);
+  return user.uid;
 }

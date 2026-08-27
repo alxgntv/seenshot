@@ -17,32 +17,6 @@
 
 namespace {
 
-bool isNearlyBlack(const QImage &image)
-{
-    if (image.isNull() || image.width() == 0 || image.height() == 0) {
-        return true;
-    }
-    const QImage rgb = image.convertToFormat(QImage::Format_RGB888);
-    qint64 sum = 0;
-    const int stepX = qMax(1, rgb.width() / 64);
-    const int stepY = qMax(1, rgb.height() / 64);
-    int samples = 0;
-    for (int y = 0; y < rgb.height(); y += stepY) {
-        const uchar *line = rgb.constScanLine(y);
-        for (int x = 0; x < rgb.width(); x += stepX) {
-            const int i = x * 3;
-            sum += line[i] + line[i + 1] + line[i + 2];
-            ++samples;
-        }
-    }
-    if (samples == 0) {
-        return true;
-    }
-    const double avg = static_cast<double>(sum) / static_cast<double>(samples * 3);
-    qInfo() << "ScreenCaptureBackend: luminance samples=" << samples << " avg=" << avg;
-    return avg < 4.0;
-}
-
 QImage imageFromCg(CGImageRef cgImage)
 {
     if (!cgImage) {
@@ -177,6 +151,12 @@ void captureWithManager(SCShareableContent *content, SCDisplay *display, const Q
 // Date: 2026-08-25
 // Related: [AT-0009] ScreenCaptureBackend.mm:captureRegion, [AT-0035] MacPermissions.mm
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0216] ─────────────────────
+// What: Drop isNearlyBlack DRM heuristic after a successful CGImage
+// Why:  Dark screenshots are valid; luminance < 4 was a homemade filter, not ScreenCaptureKit
+// Date: 2026-08-27
+// Related: [AT-0037] ScreenCaptureBackend.mm:captureRegion, [AT-0002] ErrorCatalog.cpp
+// ─────────────────────────────────────────────────────
 QImage ScreenCaptureBackend::captureRegion(const QRect &screenRect, QString *errorCode)
 {
     qInfo() << "ScreenCaptureBackend: captureRegion" << screenRect
@@ -249,13 +229,7 @@ QImage ScreenCaptureBackend::captureRegion(const QRect &screenRect, QString *err
         qWarning() << "ScreenCaptureBackend: empty image code=" << (errorCode ? *errorCode : code);
         return {};
     }
-    if (isNearlyBlack(image)) {
-        qWarning() << "ScreenCaptureBackend: frame is nearly black (DRM or denied)";
-        if (errorCode) {
-            *errorCode = QStringLiteral("SCREEN_CAPTURE_BLOCKED");
-        }
-        return {};
-    }
-    qInfo() << "ScreenCaptureBackend: captured" << image.width() << "x" << image.height();
+    qInfo() << "ScreenCaptureBackend: captured" << image.width() << "x" << image.height()
+            << " format=" << image.format() << " acceptDarkFrame=1";
     return image;
 }

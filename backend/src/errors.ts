@@ -10,7 +10,7 @@ const MESSAGES: Record<string, string> = {
   AUTH_DISPOSABLE_EMAIL: "Please enter your permanent email address.",
   CLOUD_IMAGE_REJECTED: "The screenshot was rejected by the server. Try capturing again.",
   PUBLISH_FAILED: "Could not publish this screenshot. Try again in a moment.",
-  QUOTA_EVICTED: "Oldest cloud screenshots were removed to free 10 MB.",
+  QUOTA_EVICTED: "Oldest cloud screenshots were removed to free storage.",
   PRO_GRACE_ENDED: "Pro ended. Cloud screenshots were removed. Local files are kept.",
   ACCOUNT_DELETED: "Your SeenShot account and cloud data were deleted.",
   INBOX_EXPIRED: "The upload expired before it was confirmed. Upload the screenshot again.",

@@ -8,9 +8,9 @@
     "db:init": "wrangler d1 execute seenshot --file=./schema.sql"
   },
   "dependencies": {
+    "@polar-sh/sdk": "^0.49.0",
     "jose": "^6.0.11",
-    "pngjs": "^7.0.0",
-    "stripe": "^18.4.0"
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",

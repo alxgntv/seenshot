@@ -1,8 +1,8 @@
-import Stripe from "stripe";
-import { verifyFirebaseToken } from "./auth";
+import { verifyFirebaseToken, verifyFirebaseUser } from "./auth";
 import { jsonError } from "./errors";
 import { sharePage, tosPage } from "./html";
-import { Env, QuotaShard, isShotFileId, quotaStub } from "./quota";
+import { createPolarCheckoutUrl, deletePolarCustomer, handlePolarWebhook } from "./polar";
+import { Env, QuotaShard, isShotFileId, quotaLimitBytes, quotaStub, uploadProgressKey } from "./quota";
 
 export { QuotaShard };
 
@@ -20,12 +20,41 @@ function withCors(response: Response): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
+// ─── Ariadne's Thread [AT-0219] ─────────────────────
+// What: Workers Rate Limiting on /screenshot/* and /s/*
+// Why:  Same official pathname + flood keys as seenshot-web share pages
+// Date: 2026-08-27
+// Related: [AT-0218] wrangler.toml:[[ratelimits]], [AT-0065] seenshot-web→src/index.ts:allowScreenshotTraffic
+// ─────────────────────────────────────────────────────
+async function allowScreenshotTraffic(request: Request, env: Env): Promise<Response | null> {
+  const pathname = new URL(request.url).pathname;
+  const pathLimit = await env.SCREENSHOT_RATE.limit({ key: pathname });
+  const floodLimit = await env.SCREENSHOT_FLOOD.limit({ key: "screenshot" });
+  console.log(
+    `index: screenshot rate pathname=${pathname} pathOk=${pathLimit.success} floodOk=${floodLimit.success}`,
+  );
+  if (pathLimit.success && floodLimit.success) {
+    return null;
+  }
+  console.warn(
+    `index: screenshot rate exceeded pathname=${pathname} pathOk=${pathLimit.success} floodOk=${floodLimit.success}`,
+  );
+  return new Response("Too many requests", {
+    status: 429,
+    headers: {
+      "retry-after": "60",
+      "cache-control": "no-store",
+      "content-type": "text/plain; charset=utf-8",
+    },
+  });
+}
+
 async function uidFrom(request: Request, env: Env): Promise<string> {
   return verifyFirebaseToken(request.headers.get("Authorization"), env.FIREBASE_PROJECT_ID);
 }
 
 // ─── Ariadne's Thread [AT-0033] ─────────────────────
-// What: HTTP API, share HTML, cron grace/inbox, Stripe webhooks
+// What: HTTP API, share HTML, cron grace/inbox, Polar webhooks
 // Why:  Cheap Cloudflare edge backend from the plan
 // Date: 2026-08-25
 // Related: [AT-0032] quota.ts:QuotaShard, [AT-0029] auth.ts
@@ -73,6 +102,10 @@ async function handle(request: Request, env: Env): Promise<Response> {
     return new Response("User-agent: *\nDisallow: /\n", { headers: { "content-type": "text/plain" } });
   }
   if (url.pathname.startsWith("/screenshot/") || url.pathname.startsWith("/s/")) {
+    const limited = await allowScreenshotTraffic(request, env);
+    if (limited) {
+      return limited;
+    }
     return serveShare(url, env);
   }
   if (url.pathname === "/v1/uploads/presign" && request.method === "POST") {
@@ -80,6 +113,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname.startsWith("/v1/uploads/put/") && request.method === "PUT") {
     return putInbox(request, env);
+  }
+  if (url.pathname.startsWith("/v1/uploads/progress/") && request.method === "POST") {
+    return putProgress(request, env);
   }
   if (url.pathname === "/v1/uploads/confirm" && request.method === "POST") {
     return confirm(request, env);
@@ -99,8 +135,8 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/v1/billing/checkout" && request.method === "POST") {
     return checkout(request, env);
   }
-  if (url.pathname === "/v1/stripe/webhook" && request.method === "POST") {
-    return stripeWebhook(request, env);
+  if (url.pathname === "/v1/polar/webhook" && request.method === "POST") {
+    return handlePolarWebhook(request, env);
   }
   if (url.pathname === "/v1/abuse" && (request.method === "GET" || request.method === "POST")) {
     return abuse(request, env);
@@ -189,10 +225,40 @@ async function putInbox(request: Request, env: Env): Promise<Response> {
     if (stored) {
       await env.BUCKET.delete(objectKey);
     }
+    await env.BUCKET.delete(uploadProgressKey(shotId));
     console.warn(`index: putInbox rejected size=${stored?.size ?? -1} key=${objectKey}`);
     return jsonError("CLOUD_IMAGE_REJECTED");
   }
   console.log(`index: putInbox stored ${objectKey} bytes=${stored.size}`);
+  return new Response(null, { status: 204 });
+}
+
+// ─── Ariadne's Thread [AT-0213] ─────────────────────
+// What: POST PUT byte counts into progress/{shotId}.json
+// Why:  putInbox must keep streaming request.body; Mac already has uploadProgress
+// Date: 2026-08-27
+// Related: [AT-0212] CloudClient.cpp:postUploadProgress, [AT-0211] backend/src/quota.ts:uploadProgressKey
+// ─────────────────────────────────────────────────────
+async function putProgress(request: Request, env: Env): Promise<Response> {
+  const shotId = decodeURIComponent(new URL(request.url).pathname.slice("/v1/uploads/progress/".length));
+  if (!shotId) {
+    console.warn(`index: putProgress missing shotId path=${request.url}`);
+    return jsonError("UPLOAD_FAILED", 400);
+  }
+  const body = (await request.json()) as { sent?: number; total?: number; done?: boolean };
+  const sent = Number(body.sent);
+  const total = Number(body.total);
+  const done = Boolean(body.done);
+  if (!Number.isFinite(sent) || !Number.isFinite(total) || sent < 0 || total < 1 || sent > 8 * 1024 * 1024 || total > 8 * 1024 * 1024) {
+    console.warn(`index: putProgress bad numbers shot=${shotId} sent=${sent} total=${total}`);
+    return jsonError("UPLOAD_FAILED", 400);
+  }
+  const payload = JSON.stringify({ sent, total, done });
+  const key = uploadProgressKey(shotId);
+  await env.BUCKET.put(key, payload, {
+    httpMetadata: { contentType: "application/json", cacheControl: "no-store" },
+  });
+  console.log(`index: putProgress shot=${shotId} sent=${sent} total=${total} done=${done} key=${key}`);
   return new Response(null, { status: 204 });
 }
 
@@ -225,10 +291,17 @@ async function quota(request: Request, env: Env): Promise<Response> {
   if (plan === "grace" && row?.grace_ends_at && row.grace_ends_at <= Date.now()) {
     return jsonError("PRO_GRACE_ENDED", 410);
   }
+  const user = { plan, grace_ends_at: row?.grace_ends_at ?? null };
+  const limitBytes = quotaLimitBytes(user);
+  const usedBytes = row?.used_bytes ?? 0;
+  console.log(
+    `index: quota uid=${uid} plan=${plan} used=${usedBytes} limit=${limitBytes} member=${plan === "pro" || plan === "grace"}`,
+  );
   return Response.json({
-    usedBytes: row?.used_bytes ?? 0,
+    usedBytes,
     plan,
     graceEndsAt: row?.grace_ends_at ?? null,
+    limitBytes,
   });
 }
 
@@ -256,81 +329,28 @@ async function deleteAccount(request: Request, env: Env): Promise<Response> {
   if (!deleted.ok) {
     return jsonError("DELETE_ACCOUNT_FAILED", 500);
   }
-  if (env.STRIPE_SECRET_KEY) {
-    const row = await env.DB.prepare("SELECT stripe_customer FROM users WHERE uid = ?")
-      .bind(uid)
-      .first<{ stripe_customer: string | null }>();
-    if (row?.stripe_customer) {
-      const stripe = new Stripe(env.STRIPE_SECRET_KEY);
-      try {
-        await stripe.customers.del(row.stripe_customer);
-        console.log(`index: stripe customer deleted ${row.stripe_customer}`);
-      } catch (error) {
-        console.warn("index: stripe delete failed", error);
-      }
-    }
-  }
+  await deletePolarCustomer(env, uid);
   console.log(`index: account deleted uid=${uid}`);
   return Response.json({ code: "ACCOUNT_DELETED", message: "Your SeenShot account and cloud data were deleted." });
 }
 
+// ─── Ariadne's Thread [AT-0277] ─────────────────────
+// What: POST /v1/billing/checkout creates a Polar Checkout session
+// Why:  Member upgrade must use Polar, not Stripe
+// Date: 2026-08-27
+// Related: [AT-0276] backend→polar.ts:createPolarCheckoutUrl, app→CloudClient.cpp:createCheckoutUrl
+// ─────────────────────────────────────────────────────
 async function checkout(request: Request, env: Env): Promise<Response> {
-  const uid = await uidFrom(request, env);
-  if (!env.STRIPE_SECRET_KEY) {
+  const user = await verifyFirebaseUser(request.headers.get("Authorization"), env.FIREBASE_PROJECT_ID);
+  console.log(`index: checkout uid=${user.uid} emailChars=${user.email.length}`);
+  try {
+    const url = await createPolarCheckoutUrl(request, env, user.uid, user.email);
+    console.log(`index: checkout urlChars=${url.length} uid=${user.uid}`);
+    return Response.json({ url });
+  } catch (error) {
+    console.error(`index: checkout failed uid=${user.uid}`, error);
     return jsonError("UNKNOWN_ERROR", 500);
   }
-  const stripe = new Stripe(env.STRIPE_SECRET_KEY);
-  const session = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
-    automatic_tax: { enabled: true },
-    success_url: `${env.PUBLIC_BASE_URL}/tos`,
-    cancel_url: `${env.PUBLIC_BASE_URL}/tos`,
-    client_reference_id: uid,
-    metadata: { firebase_uid: uid },
-    subscription_data: { metadata: { firebase_uid: uid } },
-  });
-  console.log(`index: checkout uid=${uid} session=${session.id}`);
-  return Response.json({ url: session.url });
-}
-
-async function stripeWebhook(request: Request, env: Env): Promise<Response> {
-  if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) {
-    return jsonError("UNKNOWN_ERROR", 500);
-  }
-  const stripe = new Stripe(env.STRIPE_SECRET_KEY);
-  const signature = request.headers.get("stripe-signature");
-  if (!signature) {
-    return jsonError("UNKNOWN_ERROR", 400);
-  }
-  const event = stripe.webhooks.constructEvent(await request.text(), signature, env.STRIPE_WEBHOOK_SECRET);
-  console.log(`index: stripe event ${event.type}`);
-  if (event.type === "invoice.payment_failed") {
-    console.log("index: payment_failed keeps current plan");
-    return Response.json({ ok: true });
-  }
-  if (event.type === "checkout.session.completed" || event.type === "customer.subscription.updated") {
-    const obj = event.data.object as { metadata?: { firebase_uid?: string }; client_reference_id?: string; customer?: string; status?: string };
-    const uid = obj.metadata?.firebase_uid || obj.client_reference_id;
-    if (uid && (event.type === "checkout.session.completed" || obj.status === "active")) {
-      await env.DB.prepare(
-        "INSERT INTO users (uid, used_bytes, plan, stripe_customer, created_at) VALUES (?, 0, 'pro', ?, ?) ON CONFLICT(uid) DO UPDATE SET plan='pro', grace_ends_at=NULL, stripe_customer=COALESCE(excluded.stripe_customer, users.stripe_customer)",
-      )
-        .bind(uid, typeof obj.customer === "string" ? obj.customer : null, Date.now())
-        .run();
-      console.log(`index: plan pro uid=${uid}`);
-    }
-  }
-  if (event.type === "customer.subscription.deleted") {
-    const obj = event.data.object as { metadata?: { firebase_uid?: string } };
-    const uid = obj.metadata?.firebase_uid;
-    if (uid) {
-      const grace = Date.now() + 7 * 24 * 60 * 60 * 1000;
-      await env.DB.prepare("UPDATE users SET plan = 'grace', grace_ends_at = ? WHERE uid = ?").bind(grace, uid).run();
-      console.log(`index: grace started uid=${uid} ends=${grace}`);
-    }
-  }
-  return Response.json({ ok: true });
 }
 
 async function abuse(request: Request, env: Env): Promise<Response> {
@@ -365,15 +385,19 @@ async function purgeExpiredGrace(env: Env): Promise<void> {
 
 async function cleanupInbox(env: Env): Promise<void> {
   const cutoff = Date.now() - 60 * 60 * 1000;
-  let cursor: string | undefined;
-  do {
-    const listed = await env.BUCKET.list({ prefix: "inbox/", cursor });
-    for (const obj of listed.objects) {
-      if (obj.uploaded.getTime() < cutoff) {
-        await env.BUCKET.delete(obj.key);
-        console.log(`index: inbox expired ${obj.key}`);
+  async function expirePrefix(prefix: string) {
+    let cursor: string | undefined;
+    do {
+      const listed = await env.BUCKET.list({ prefix, cursor });
+      for (const obj of listed.objects) {
+        if (obj.uploaded.getTime() < cutoff) {
+          await env.BUCKET.delete(obj.key);
+          console.log(`index: expired ${obj.key} prefix=${prefix}`);
+        }
       }
-    }
-    cursor = listed.truncated ? listed.cursor : undefined;
-  } while (cursor);
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor);
+  }
+  await expirePrefix("inbox/");
+  await expirePrefix("progress/");
 }

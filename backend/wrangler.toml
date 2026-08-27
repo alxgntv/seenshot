@@ -41,6 +41,34 @@ type = "Text"
 globs = ["**/*.conf"]
 fallthrough = true
 
+# ─── Ariadne's Thread [AT-0218] ─────────────────────
+# What: Workers Rate Limiting bindings for /screenshot/* and /s/*
+# Why:  API Worker still serves share HTML on workers.dev
+# Date: 2026-08-27
+# Related: [AT-0219] backend/src/index.ts:allowScreenshotTraffic, https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
+# ─────────────────────────────────────────────────────
+[[ratelimits]]
+name = "SCREENSHOT_RATE"
+namespace_id = "45303"
+
+  [ratelimits.simple]
+  limit = 1500
+  period = 60
+
+[[ratelimits]]
+name = "SCREENSHOT_FLOOD"
+namespace_id = "45304"
+
+  [ratelimits.simple]
+  limit = 1500
+  period = 60
+
+# ─── Ariadne's Thread [AT-0280] ─────────────────────
+# What: Polar product and organization ids for Member checkout
+# Why:  Billing uses Polar, not Stripe; token and webhook secret stay in wrangler secrets
+# Date: 2026-08-27
+# Related: [AT-0277] backend/src/index.ts:checkout, https://polar.sh/docs/introduction
+# ─────────────────────────────────────────────────────
 [vars]
 FIREBASE_PROJECT_ID = "seenshot-app"
 PUBLIC_BASE_URL = "https://seenshot.app"
@@ -49,5 +77,6 @@ R2_ACCOUNT_ID = "2a3ba77f5940f33d1c239fdff0a34f3c"
 R2_ACCESS_KEY_ID = "REPLACE_ACCESS_KEY"
 R2_SECRET_ACCESS_KEY = "REPLACE_SECRET"
 R2_BUCKET = "seenshot"
-STRIPE_PRICE_ID = "REPLACE_PRICE"
+POLAR_PRODUCT_ID = "1e090046-70dd-4edd-9280-9ba6a17035c1"
+POLAR_ORGANIZATION_ID = "15f227e3-ca19-4923-92c5-d3b4dfa54e24"
 ABUSE_EMAIL = "abuse@seenshot.com"

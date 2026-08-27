@@ -3,6 +3,7 @@
 #include "app/Config.h"
 #include "auth/AuthSession.h"
 
+#include <QDateTime>
 #include <QDebug>
 #include <QEventLoop>
 #include <QFile>
@@ -98,13 +99,27 @@ bool CloudClient::presignAndPut(const QByteArray &png, const QString &fileId, QS
     putRequest.setTransferTimeout(60000);
     QNetworkReply *reply = m_nam->put(putRequest, png);
     QEventLoop loop;
+    qint64 lastProgressPostMs = 0;
+    const QString progressShotId = *shotId;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QObject::connect(reply, &QNetworkReply::uploadProgress, &loop, [&progress](qint64 sent, qint64 total) {
-        qInfo() << "CloudClient: R2 PUT progress sent=" << sent << " total=" << total;
-        if (progress) {
-            progress(sent, total);
-        }
-    });
+    QObject::connect(reply, &QNetworkReply::uploadProgress, &loop,
+                     [this, &progress, &lastProgressPostMs, progressShotId](qint64 sent, qint64 total) {
+                         qInfo() << "CloudClient: R2 PUT progress sent=" << sent << " total=" << total;
+                         if (progress) {
+                             progress(sent, total);
+                         }
+                         if (total <= 0) {
+                             qInfo() << "CloudClient: skip progress POST total=" << total << " shot=" << progressShotId;
+                             return;
+                         }
+                         const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                         const bool done = sent >= total;
+                         if (!done && now - lastProgressPostMs < 200) {
+                             return;
+                         }
+                         lastProgressPostMs = now;
+                         postUploadProgress(progressShotId, sent, total, done);
+                     });
     loop.exec();
     const QNetworkReply::NetworkError netError = reply->error();
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -120,7 +135,42 @@ bool CloudClient::presignAndPut(const QByteArray &png, const QString &fileId, QS
         }
         return false;
     }
+    postUploadProgress(progressShotId, png.size(), png.size(), true);
     return true;
+}
+
+// ─── Ariadne's Thread [AT-0212] ─────────────────────
+// What: Fire-and-forget POST of PUT bytes to /v1/uploads/progress/{shotId}
+// Why:  Counting inside putInbox TransformStream 500'd a 5.4MB upload; Mac already has sent/total
+// Date: 2026-08-27
+// Related: [AT-0170] CloudClient.cpp:presignAndPut, [AT-0213] backend/src/index.ts:putProgress
+// ─────────────────────────────────────────────────────
+void CloudClient::postUploadProgress(const QString &shotId, qint64 sent, qint64 total, bool done)
+{
+    if (shotId.isEmpty() || total <= 0 || sent < 0) {
+        qWarning() << "CloudClient: progress POST skipped shot=" << shotId << " sent=" << sent << " total=" << total
+                   << " done=" << done;
+        return;
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("sent"), sent);
+    body.insert(QStringLiteral("total"), total);
+    body.insert(QStringLiteral("done"), done);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+    const QUrl url(Config::apiBaseUrl() + QStringLiteral("/v1/uploads/progress/")
+                   + QString::fromUtf8(QUrl::toPercentEncoding(shotId)));
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    QNetworkReply *reply = m_nam->post(request, payload);
+    qInfo() << "CloudClient: progress POST shot=" << shotId << " sent=" << sent << " total=" << total
+            << " done=" << done << " bytes=" << payload.size();
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, shotId]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QNetworkReply::NetworkError netError = reply->error();
+        qInfo() << "CloudClient: progress POST finished shot=" << shotId << " status=" << status
+                << " netError=" << static_cast<int>(netError);
+        reply->deleteLater();
+    });
 }
 
 bool CloudClient::confirm(const QString &shotId, bool publish, CloudConfirmResult *result, QString *errorCode)

@@ -1,5 +1,11 @@
-import { applyWatermark, readPngSize } from "./watermark";
+import { readPngSize } from "./watermark";
 
+// ─── Ariadne's Thread [AT-0220] ─────────────────────
+// What: Bind SCREENSHOT_RATE and SCREENSHOT_FLOOD on the API Env
+// Why:  /screenshot and /s on this Worker use the Rate Limiting API
+// Date: 2026-08-27
+// Related: [AT-0218] wrangler.toml:[[ratelimits]], [AT-0219] backend/src/index.ts:allowScreenshotTraffic
+// ─────────────────────────────────────────────────────
 export interface Env {
   DB: D1Database;
   BUCKET: R2Bucket;
@@ -11,13 +17,34 @@ export interface Env {
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   R2_BUCKET: string;
-  STRIPE_PRICE_ID: string;
-  STRIPE_SECRET_KEY?: string;
-  STRIPE_WEBHOOK_SECRET?: string;
+  POLAR_PRODUCT_ID: string;
+  POLAR_ORGANIZATION_ID: string;
+  POLAR_ACCESS_TOKEN?: string;
+  POLAR_WEBHOOK_SECRET?: string;
   ABUSE_EMAIL: string;
+  SCREENSHOT_RATE: RateLimit;
+  SCREENSHOT_FLOOD: RateLimit;
 }
 
-const QUOTA_BYTES = 10 * 1024 * 1024;
+export const FREE_QUOTA_BYTES = 10 * 1024 * 1024;
+export const MEMBER_QUOTA_BYTES = 1024 * 1024 * 1024;
+
+export function isMemberQuota(user: { plan: string; grace_ends_at: number | null }): boolean {
+  if (user.plan === "pro") {
+    return true;
+  }
+  if (user.plan === "grace" && user.grace_ends_at && user.grace_ends_at > Date.now()) {
+    return true;
+  }
+  return false;
+}
+
+export function quotaLimitBytes(user: { plan: string; grace_ends_at: number | null } | null | undefined): number {
+  if (user && isMemberQuota(user)) {
+    return MEMBER_QUOTA_BYTES;
+  }
+  return FREE_QUOTA_BYTES;
+}
 
 // ─── Ariadne's Thread [AT-0185] ─────────────────────
 // What: Public URL is /screenshot/{fileId} from the local PNG name
@@ -35,6 +62,16 @@ export function isShotFileId(value: string): boolean {
   const ok = /^[0-9a-f]{12}$/.test(value);
   console.log(`QuotaShard: isShotFileId value=${value} ok=${ok}`);
   return ok;
+}
+
+// ─── Ariadne's Thread [AT-0211] ─────────────────────
+// What: R2 key for PUT byte progress so /screenshot can poll real upload speed
+// Why:  Wait page must not fake 0-90% on a timer; bytes already flow through putInbox
+// Date: 2026-08-27
+// Related: [AT-0170] backend/src/index.ts:putInbox, [AT-0055] seenshot-web→src/index.ts:uploadProgress
+// ─────────────────────────────────────────────────────
+export function uploadProgressKey(shotId: string): string {
+  return `progress/${shotId}.json`;
 }
 
 function shardName(uid: string): string {
@@ -102,6 +139,13 @@ export class QuotaShard {
         return this.deleteAccount(payload.uid);
       case "purgeCloud":
         return this.purgeCloud(payload.uid);
+      case "setPlan":
+        return this.setPlan(
+          payload.uid,
+          String(payload.plan || ""),
+          typeof payload.polarCustomer === "string" ? payload.polarCustomer : null,
+          typeof payload.graceEndsAt === "number" ? payload.graceEndsAt : null,
+        );
       default:
         return Response.json({ code: "UNKNOWN_ERROR", message: "Unknown shard action" }, { status: 400 });
     }
@@ -121,20 +165,64 @@ export class QuotaShard {
     return { used_bytes: 0, plan: "free", grace_ends_at: null };
   }
 
-  private isPro(user: { plan: string; grace_ends_at: number | null }): boolean {
-    if (user.plan === "pro") {
-      return true;
+  // ─── Ariadne's Thread [AT-0278] ─────────────────────
+  // What: Set plan to pro or grace inside the per-uid Durable Object lock
+  // Why:  Polar webhooks must not race confirm() reading a stale 10 MB cap
+  // Date: 2026-08-27
+  // Related: [AT-0276] backend→polar.ts:applyPolarCustomerState, [AT-0279] backend→quota.ts:evictUntilFits
+  // ─────────────────────────────────────────────────────
+  private async setPlan(
+    uid: string,
+    plan: string,
+    polarCustomer: string | null,
+    graceEndsAt: number | null,
+  ): Promise<Response> {
+    const user = await this.ensureUser(uid);
+    console.log(
+      `QuotaShard: setPlan uid=${uid} from=${user.plan} to=${plan} polarCustomer=${polarCustomer ?? ""}` +
+        ` graceEndsAt=${graceEndsAt ?? ""}`,
+    );
+    if (plan === "pro") {
+      await this.env.DB.prepare(
+        "UPDATE users SET plan = 'pro', grace_ends_at = NULL, polar_customer = COALESCE(?, polar_customer) WHERE uid = ?",
+      )
+        .bind(polarCustomer, uid)
+        .run();
+      console.log(`QuotaShard: plan pro uid=${uid} polarCustomer=${polarCustomer ?? ""}`);
+      return Response.json({ ok: true, plan: "pro" });
     }
-    if (user.plan === "grace" && user.grace_ends_at && user.grace_ends_at > Date.now()) {
-      return true;
+    if (plan === "grace") {
+      if (user.plan !== "pro") {
+        console.log(`QuotaShard: skip grace uid=${uid} plan=${user.plan}`);
+        return Response.json({ ok: true, plan: user.plan });
+      }
+      const ends = typeof graceEndsAt === "number" ? graceEndsAt : Date.now() + 7 * 24 * 60 * 60 * 1000;
+      await this.env.DB.prepare("UPDATE users SET plan = 'grace', grace_ends_at = ? WHERE uid = ?").bind(ends, uid).run();
+      console.log(`QuotaShard: grace started uid=${uid} ends=${ends}`);
+      return Response.json({ ok: true, plan: "grace" });
     }
-    return false;
+    console.warn(`QuotaShard: setPlan unknown plan=${plan} uid=${uid}`);
+    return Response.json({ code: "UNKNOWN_ERROR", message: "Unknown plan" }, { status: 400 });
   }
 
-  private async evictUntilFits(uid: string, used: number, incoming: number): Promise<string[]> {
+  // ─── Ariadne's Thread [AT-0279] ─────────────────────
+  // What: Evict against Free 10 MB or Member 1 GB from the user's plan
+  // Why:  Polar Member must actually raise screenshot storage, not keep 10 MB
+  // Date: 2026-08-27
+  // Related: [AT-0071] seenshot-web→src/index.ts:me, [AT-0278] backend→quota.ts:setPlan
+  // ─────────────────────────────────────────────────────
+  private async evictUntilFits(
+    uid: string,
+    user: { used_bytes: number; plan: string; grace_ends_at: number | null },
+    incoming: number,
+  ): Promise<string[]> {
     const evicted: string[] = [];
-    let current = used;
-    while (current + incoming > QUOTA_BYTES) {
+    let current = user.used_bytes;
+    const cap = quotaLimitBytes(user);
+    console.log(
+      `QuotaShard: evictUntilFits uid=${uid} plan=${user.plan} used=${current} incoming=${incoming} cap=${cap}`,
+    );
+    while (current + incoming > cap) {
       const oldest = await this.env.DB.prepare(
         "SELECT shot_id, bytes, public_id, visibility FROM shots WHERE uid = ? ORDER BY created_at ASC LIMIT 1",
       )
@@ -157,10 +245,17 @@ export class QuotaShard {
     if (publicId) {
       await this.env.BUCKET.delete(`public/${publicId}.png`);
     }
+    await this.env.BUCKET.delete(uploadProgressKey(shotId));
     await this.env.DB.prepare("DELETE FROM shots WHERE shot_id = ?").bind(shotId).run();
-    console.log(`QuotaShard: deleted shot=${shotId} visibility=${visibility}`);
+    console.log(`QuotaShard: deleted shot=${shotId} visibility=${visibility} progressKey=${uploadProgressKey(shotId)}`);
   }
 
+  // ─── Ariadne's Thread [AT-0216] ─────────────────────
+  // What: Confirm copies inbox PNG as-is; watermarked stays 0
+  // Why:  Mac already encoded the public file; pngjs rewrite changed size and stamped SeenShot
+  // Date: 2026-08-27
+  // Related: [AT-0214] app→CloudPngEncoder.cpp:encode, [AT-0031] backend/src/watermark.ts:applyWatermark
+  // ─────────────────────────────────────────────────────
   private async confirm(uid: string, shotId: string, publish: boolean): Promise<Response> {
     const existing = await this.env.DB.prepare(
       "SELECT shot_id, public_id, visibility FROM shots WHERE shot_id = ? AND uid = ?",
@@ -169,6 +264,7 @@ export class QuotaShard {
       .first<{ shot_id: string; public_id: string | null; visibility: string }>();
     if (existing) {
       console.log(`QuotaShard: confirm idempotent shot=${shotId}`);
+      await this.env.BUCKET.delete(uploadProgressKey(shotId));
       const publicUrl =
         existing.visibility === "public" && existing.public_id
           ? publicShareUrl(this.env.PUBLIC_BASE_URL, existing.public_id)
@@ -204,18 +300,22 @@ export class QuotaShard {
       readPngSize(bytes);
     } catch {
       await this.env.BUCKET.delete(inboxKey);
+      await this.env.BUCKET.delete(uploadProgressKey(shotId));
       return Response.json(
         { code: "CLOUD_IMAGE_REJECTED", message: "The screenshot was rejected by the server. Try capturing again." },
         { status: 400 },
       );
     }
     const user = await this.ensureUser(uid);
-    const evicted = await this.evictUntilFits(uid, user.used_bytes, bytes.byteLength);
+    const evicted = await this.evictUntilFits(uid, user, bytes.byteLength);
     const publicId = shotId;
     const now = Date.now();
-    let stored: Uint8Array = new Uint8Array(bytes);
+    const stored = new Uint8Array(bytes);
+    const watermarked = 0;
     let visibility = "private";
-    let watermarked = 0;
+    console.log(
+      `QuotaShard: confirm copy inbox as-is shot=${shotId} bytes=${stored.byteLength} watermarked=${watermarked} publish=${publish}`,
+    );
     if (publish) {
       const clash = await this.env.DB.prepare("SELECT shot_id FROM shots WHERE public_id = ?")
         .bind(publicId)
@@ -228,10 +328,6 @@ export class QuotaShard {
         );
       }
       visibility = "public";
-      if (!this.isPro(user)) {
-        stored = new Uint8Array(applyWatermark(bytes));
-        watermarked = 1;
-      }
       await this.env.BUCKET.put(`public/${publicId}.png`, stored, {
         httpMetadata: {
           contentType: "image/png",
@@ -239,11 +335,22 @@ export class QuotaShard {
         },
       });
     } else {
+      // ─── Ariadne's Thread [AT-0221] ─────────────────────
+      // What: private/{uid}/{id}.png Cache-Control private, max-age=86400
+      // Why:  Cabinet img hits this object; 60s GET override made every revisit a full R2 read
+      // Date: 2026-08-27
+      // Related: [AT-0070] seenshot-web→src/index.ts:shotImage, [AT-0216] backend/src/quota.ts:confirm
+      // ─────────────────────────────────────────────────────
       await this.env.BUCKET.put(`private/${uid}/${shotId}.png`, stored, {
-        httpMetadata: { contentType: "image/png" },
+        httpMetadata: {
+          contentType: "image/png",
+          cacheControl: "private, max-age=86400",
+        },
       });
     }
     await this.env.BUCKET.delete(inboxKey);
+    await this.env.BUCKET.delete(uploadProgressKey(shotId));
+    console.log(`QuotaShard: confirm deleted progress shot=${shotId} key=${uploadProgressKey(shotId)}`);
     await this.env.DB.prepare(
       "INSERT INTO shots (shot_id, uid, created_at, bytes, visibility, public_id, watermarked) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
@@ -255,10 +362,18 @@ export class QuotaShard {
     const usedBytes = usedRow?.used ?? stored.byteLength;
     await this.env.DB.prepare("UPDATE users SET used_bytes = ? WHERE uid = ?").bind(usedBytes, uid).run();
     const publicUrl = publish ? publicShareUrl(this.env.PUBLIC_BASE_URL, publicId) : "";
-    console.log(`QuotaShard: confirm ok shot=${shotId} publish=${publish} publicId=${publicId} used=${usedBytes} evicted=${evicted.length}`);
+    console.log(
+      `QuotaShard: confirm ok shot=${shotId} publish=${publish} publicId=${publicId} used=${usedBytes} bytes=${stored.byteLength} watermarked=${watermarked} evicted=${evicted.length}`,
+    );
     return Response.json({ shotId, publicUrl, usedBytes, evictedIds: evicted });
   }
 
+  // ─── Ariadne's Thread [AT-0217] ─────────────────────
+  // What: publishExisting copies private PNG to public as-is; watermarked=0
+  // Why:  Re-share must not re-encode or stamp; same bytes as Mac PUT
+  // Date: 2026-08-27
+  // Related: [AT-0216] backend/src/quota.ts:confirm, [AT-0031] backend/src/watermark.ts:applyWatermark
+  // ─────────────────────────────────────────────────────
   private async publishExisting(uid: string, shotId: string): Promise<Response> {
     const row = await this.env.DB.prepare(
       "SELECT bytes, visibility, public_id, watermarked FROM shots WHERE shot_id = ? AND uid = ?",
@@ -288,14 +403,12 @@ export class QuotaShard {
       );
     }
     const bytes = await object.arrayBuffer();
-    const user = await this.ensureUser(uid);
-    let stored = new Uint8Array(bytes);
-    let watermarked = 0;
-    if (!this.isPro(user)) {
-      stored = new Uint8Array(applyWatermark(bytes));
-      watermarked = 1;
-    }
+    const stored = new Uint8Array(bytes);
+    const watermarked = 0;
     const publicId = shotId;
+    console.log(
+      `QuotaShard: publishExisting copy private as-is shot=${shotId} bytes=${stored.byteLength} watermarked=${watermarked}`,
+    );
     const clash = await this.env.DB.prepare("SELECT shot_id FROM shots WHERE public_id = ?")
       .bind(publicId)
       .first<{ shot_id: string }>();
@@ -324,7 +437,9 @@ export class QuotaShard {
     await this.env.DB.prepare("UPDATE users SET used_bytes = ? WHERE uid = ?")
       .bind(usedRow?.used ?? stored.byteLength, uid)
       .run();
-    console.log(`QuotaShard: published existing shot=${shotId} public=${publicId}`);
+    console.log(
+      `QuotaShard: published existing shot=${shotId} public=${publicId} bytes=${stored.byteLength} watermarked=${watermarked}`,
+    );
     return Response.json({
       shotId,
       publicUrl: publicShareUrl(this.env.PUBLIC_BASE_URL, publicId),

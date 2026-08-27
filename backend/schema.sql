@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   used_bytes INTEGER NOT NULL DEFAULT 0,
   plan TEXT NOT NULL DEFAULT 'free',
   grace_ends_at INTEGER,
-  stripe_customer TEXT,
+  polar_customer TEXT,
   created_at INTEGER NOT NULL
 );
 
