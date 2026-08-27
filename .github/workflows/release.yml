@@ -1,0 +1,157 @@
+# ─── Ariadne's Thread [AT-0121] ─────────────────────
+# What: Tag v* builds a notarized zip and publishes Sparkle appcast
+# Why:  Users update from updates.seenshot.com, not from git
+# Date: 2026-08-26
+# Related: [AT-0120] packaging/macos/package_sparkle.sh, docs/PRD-05-auto-update.md
+# ─────────────────────────────────────────────────────
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "package_sparkle: tag=${TAG} version=${VERSION}"
+          PLIST_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/macos/Info.plist)"
+          CMAKE_VER="$(awk '/^project\(SeenShot VERSION/{print $3; exit}' CMakeLists.txt)"
+          echo "package_sparkle: plist=${PLIST_VER} cmake=${CMAKE_VER}"
+          if [[ "${PLIST_VER}" != "${VERSION}" ]] || [[ "${CMAKE_VER}" != "${VERSION}" ]]; then
+            echo "package_sparkle: ERROR version mismatch tag=${VERSION} plist=${PLIST_VER} cmake=${CMAKE_VER}" >&2
+            exit 1
+          fi
+
+      - name: Install build tools
+        run: |
+          brew install cmake qt ninja curl
+          echo "package_sparkle: brew qt cmake ready"
+
+      - name: Sparkle CLI 2.8.1
+        run: |
+          mkdir -p "${HOME}/sparkle-tools"
+          curl -fsSL -o /tmp/Sparkle-2.8.1.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/2.8.1/Sparkle-2.8.1.tar.xz"
+          tar -xJf /tmp/Sparkle-2.8.1.tar.xz -C "${HOME}/sparkle-tools"
+          ls "${HOME}/sparkle-tools/bin"
+          echo "SPARKLE_BIN=${HOME}/sparkle-tools/bin" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          if [[ -z "${APPLE_DEVELOPER_ID_P12}" ]]; then
+            echo "package_sparkle: ERROR secret APPLE_DEVELOPER_ID_P12 is empty" >&2
+            exit 1
+          fi
+          P12="$(mktemp).p12"
+          echo "${APPLE_DEVELOPER_ID_P12}" | base64 --decode > "${P12}"
+          KEYCHAIN="${RUNNER_TEMP}/seenshot.keychain-db"
+          PASSWORD="$(openssl rand -base64 24)"
+          security create-keychain -p "${PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${PASSWORD}" "${KEYCHAIN}"
+          security import "${P12}" -k "${KEYCHAIN}" -P "${APPLE_DEVELOPER_ID_P12_PASSWORD}" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${PASSWORD}" "${KEYCHAIN}"
+          security list-keychain -d user -s "${KEYCHAIN}"
+          rm -f "${P12}"
+          IDENTITY="$(security find-identity -v -p codesigning "${KEYCHAIN}" | awk -F'\"' '/Developer ID Application/{print $2; exit}')"
+          if [[ -z "${IDENTITY}" ]]; then
+            echo "package_sparkle: ERROR no Developer ID Application in imported p12" >&2
+            security find-identity -v -p codesigning "${KEYCHAIN}"
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=${IDENTITY}" >> "$GITHUB_ENV"
+          echo "package_sparkle: imported ${IDENTITY}"
+
+      - name: Package zip and appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          NOTARY_KEY: ${{ secrets.APPLE_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          QT_PREFIX: /opt/homebrew/opt/qtbase
+        run: |
+          export CODESIGN_IDENTITY
+          export SPARKLE_BIN
+          export VERSION
+          export GITHUB_REPOSITORY
+          if [[ -z "${SPARKLE_ED_PRIVATE_KEY}" ]]; then
+            echo "package_sparkle: ERROR secret SPARKLE_ED_PRIVATE_KEY is empty" >&2
+            exit 1
+          fi
+          if [[ -z "${NOTARY_KEY}" || -z "${NOTARY_KEY_ID}" || -z "${NOTARY_ISSUER}" ]]; then
+            echo "package_sparkle: ERROR notary secrets APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER missing" >&2
+            exit 1
+          fi
+          chmod +x packaging/macos/package_sparkle.sh
+          packaging/macos/package_sparkle.sh
+          echo "DMG_PATH=${GITHUB_WORKSPACE}/build/SeenShot-${VERSION}-arm64.dmg" >> "$GITHUB_ENV"
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # ─── Ariadne's Thread [AT-0141] ─────────────────────
+          # What: GitHub Release body is git subjects since the previous tag
+          # Why:  Site notes must list product changes in this version, not install copy
+          # Date: 2026-08-26
+          # Related: [AT-0140] docs/index.html:releaseCard, [AT-0121] .github/workflows/release.yml
+          # ─────────────────────────────────────────────────────
+          NOTES_FILE="$(mktemp)"
+          TAG_BODY="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")"
+          PREV="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          if [[ -n "${TAG_BODY}" ]]; then
+            printf '%s\n' "${TAG_BODY}" > "${NOTES_FILE}"
+            echo "package_sparkle: notes from annotated tag ${GITHUB_REF_NAME} chars=${#TAG_BODY}"
+          elif [[ -n "${PREV}" ]]; then
+            git log "${PREV}..HEAD" --pretty=format:'- %s' > "${NOTES_FILE}"
+            echo "package_sparkle: notes from ${PREV}..HEAD lines=$(wc -l < "${NOTES_FILE}" | tr -d ' ')"
+          else
+            printf 'SeenShot %s.\n' "${VERSION}" > "${NOTES_FILE}"
+            echo "package_sparkle: no previous tag, default notes version=${VERSION}"
+          fi
+          if [[ ! -s "${NOTES_FILE}" ]]; then
+            printf 'SeenShot %s.\n' "${VERSION}" > "${NOTES_FILE}"
+            echo "package_sparkle: empty git log, default notes version=${VERSION}"
+          fi
+          echo "package_sparkle: notesChars=$(wc -c < "${NOTES_FILE}" | tr -d ' ')"
+          cat "${NOTES_FILE}"
+          gh release create "${GITHUB_REF_NAME}" \
+            "${DMG_PATH}" \
+            --title "SeenShot ${VERSION}" \
+            --notes-file "${NOTES_FILE}"
+          rm -f "${NOTES_FILE}"
+          echo "package_sparkle: release ${GITHUB_REF_NAME} uploaded"
+
+      - name: Commit appcast
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast.xml packaging/macos/appcast.xml
+          if git diff --cached --quiet; then
+            echo "package_sparkle: appcast unchanged"
+          else
+            git commit -m "Publish Sparkle appcast for ${VERSION}"
+            git push origin HEAD:main
+            echo "package_sparkle: appcast pushed to main"
+          fi
