@@ -19,6 +19,14 @@ public:
     static void removeTempCapture(const QString &path);
     static bool firstRunCompleted();
     static void setFirstRunCompleted();
+    // ─── Ariadne's Thread [AT-0175] ─────────────────────
+    // What: Persist that this Mac already registered SeenShot with Screen Recording TCC
+    // Why:  CGRequestScreenCaptureAccess every launch showed Open Settings while another signed copy was already on
+    // Date: 2026-08-26
+    // Related: [AT-0176] Application.cpp:ensureScreenRecording, [AT-0178] MacPermissions.mm:probeScreenRecording
+    // ─────────────────────────────────────────────────────
+    static bool screenRecordingRegistered();
+    static void setScreenRecordingRegistered();
     static QString hotkeySpec();
     static void setHotkeySpec(const QString &spec);
     static QString fullScreenHotkeySpec();

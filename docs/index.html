@@ -14,6 +14,7 @@
       --pink: #ff4d9a;
       --yellow: #ffd23f;
       --orange: #ff7a1a;
+      --red: #ff3b30;
     }
     * { box-sizing: border-box; }
     body {
@@ -42,11 +43,21 @@
     }
     h1 {
       margin: 28px 0 8px;
-      font-size: clamp(42px, 8vw, 64px);
+      font-size: clamp(22px, 7.2vw, 56px);
       letter-spacing: -0.04em;
-      line-height: 0.9;
+      line-height: 1;
+      white-space: nowrap;
     }
     h1 span { color: var(--yellow); }
+    h1 .send {
+      white-space: nowrap;
+      color: var(--red);
+    }
+    h1 .send .send-arrow {
+      font-size: 0.62em;
+      color: inherit;
+      vertical-align: middle;
+    }
     .lede {
       margin: 0 0 28px;
       font-size: 18px;
@@ -213,20 +224,20 @@
   <main>
     <section class="hero">
       <img src="SeenShot.png" alt="SeenShot">
-      <!-- ─── Ariadne's Thread [AT-0144] ─────────────────────
-        What: Hero h1 is the slogan Seen it? Shot it!
-        Why:  Product name stays on the icon and in the document title
+      <!-- ─── Ariadne's Thread [AT-0159] ─────────────────────
+        What: Yellow spans Shot it!; Send It ↗ is all red
+        Why:  Only Shot was yellow; the arrow had stayed paper-white
+        Date: 2026-08-26
+        Related: [AT-0158] docs/index.html, [AT-0157] docs/index.html
+      ─────────────────────────────────────────────────────── -->
+      <h1>Seen it? <span>Shot it!</span> <span class="send">Send It&nbsp;<span class="send-arrow">↗</span></span></h1>
+      <!-- ─── Ariadne's Thread [AT-0160] ─────────────────────
+        What: Hero lede starts Fast, Free, Secure
+        Why:  Product line now states those three attributes first
         Date: 2026-08-26
         Related: [AT-0143] docs/index.html, [AT-0133] docs/index.html
       ─────────────────────────────────────────────────────── -->
-      <h1>Seen it? <span>Shot</span> it!</h1>
-      <!-- ─── Ariadne's Thread [AT-0143] ─────────────────────
-        What: Hero lede is the product one-liner
-        Why:  Replace capture/platform line with fast lightweight annotation copy
-        Date: 2026-08-26
-        Related: [AT-0133] docs/index.html, [AT-0142] docs/index.html
-      ─────────────────────────────────────────────────────── -->
-      <p class="lede">Fast lightweight screenshot app for Mac with superfunctional annotation.</p>
+      <p class="lede">Fast, Free, Secure. Lightweight screenshot app for Mac with superfunctional annotation.</p>
       <a id="latest-download" class="download" href="https://github.com/alxgntv/seenshot/releases">Download</a>
       <p id="latest-meta" class="meta">Loading releases…</p>
     </section>

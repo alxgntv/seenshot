@@ -7,6 +7,7 @@
 
 const MESSAGES: Record<string, string> = {
   AUTH_REFRESH_FAILED: "Could not refresh your sign-in. Check your internet connection and try again.",
+  AUTH_DISPOSABLE_EMAIL: "Please enter your permanent email address.",
   CLOUD_IMAGE_REJECTED: "The screenshot was rejected by the server. Try capturing again.",
   PUBLISH_FAILED: "Could not publish this screenshot. Try again in a moment.",
   QUOTA_EVICTED: "Oldest cloud screenshots were removed to free 10 MB.",

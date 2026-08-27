@@ -3,7 +3,6 @@
 #include "annotate/AnnotateWindow.h"
 #include "app/Analytics.h"
 #include "app/Config.h"
-#include "app/MacLoginItem.h"
 #include "app/MacPermissions.h"
 #include "app/MacUrlHandler.h"
 #include "app/FirstRunWizard.h"
@@ -55,8 +54,7 @@ Application::Application(QObject *parent)
     qInfo() << "Application: constructed firebaseApiKeyChars=" << Config::firebaseApiKey().size()
             << " firebaseProjectId=" << Config::firebaseProjectId()
             << " authDomain=" << Config::firebaseAuthDomain()
-            << " appIdChars=" << Config::firebaseAppId().size()
-            << " googleOAuthClientIdChars=" << Config::googleOAuthClientId().size();
+            << " appIdChars=" << Config::firebaseAppId().size();
 }
 
 Application::~Application()
@@ -64,17 +62,20 @@ Application::~Application()
     delete m_store;
 }
 
+// ─── Ariadne's Thread [AT-0171] ─────────────────────
+// What: Do not register SMAppService on launch
+// Why:  Login Item prompt is extra TCC; only Screen Recording is required after install
+// Date: 2026-08-26
+// Related: [AT-0081] MacLoginItem.mm:setEnabled, [AT-0171] KeychainStore.cpp
+// ─────────────────────────────────────────────────────
 void Application::start()
 {
-    qInfo() << "Application: start firstRun=" << !LocalStore::firstRunCompleted();
+    qInfo() << "Application: start firstRun=" << !LocalStore::firstRunCompleted()
+            << " path=" << MacPermissions::runningAppPath();
     qApp->installEventFilter(this);
     MacUrlHandler::install([this](const QUrl &url) {
         handleOpenUrl(url);
     });
-    QString loginError;
-    if (!MacLoginItem::ensureEnabled(&loginError)) {
-        qWarning() << "Application: login item default-on failed" << loginError;
-    }
     if (!LocalStore::firstRunCompleted()) {
         FirstRunWizard wizard;
         if (wizard.exec() == QDialog::Accepted) {
@@ -139,49 +140,98 @@ void Application::applyHotkeys()
     m_tray->refreshCaptureShortcuts(fullSpec, pathSpec);
 }
 
-// ─── Ariadne's Thread [AT-0038] ─────────────────────
-// What: Ask Screen Recording once per process; do not start capture until CGPreflight is true
-// Why:  Settings toggle ON does not apply to the already-running process; old flow opened 3 dialogs every shot
-// Date: 2026-08-25
-// Related: [AT-0025] Application.cpp:beginCapture, [AT-0035] MacPermissions.mm
+// ─── Ariadne's Thread [AT-0176] ─────────────────────
+// What: Grant capture via CGPreflight or ScreenCaptureKit; help dialog instead of looping CGRequest
+// Why:  CGRequest every launch showed Open Settings while the switch belonged to another signed copy
+// Date: 2026-08-26
+// Related: [AT-0178] MacPermissions.mm:probeScreenRecording, [AT-0175] LocalStore.cpp:screenRecordingRegistered
 // ─────────────────────────────────────────────────────
 bool Application::ensureScreenRecording()
 {
-    if (MacPermissions::hasScreenRecording()) {
-        qInfo() << "Application: screen recording granted";
+    if (m_ensuringScreenRecording) {
+        qWarning() << "Application: ensureScreenRecording reentered capturing=" << m_capturing
+                   << " path=" << MacPermissions::runningAppPath();
+        return false;
+    }
+    m_ensuringScreenRecording = true;
+
+    const bool preflight = MacPermissions::hasScreenRecording();
+    qInfo() << "Application: ensureScreenRecording preflight=" << preflight
+            << " registered=" << LocalStore::screenRecordingRegistered()
+            << " requestedThisProcess=" << m_requestedScreenRecording
+            << " path=" << MacPermissions::runningAppPath();
+    if (preflight) {
+        LocalStore::setScreenRecordingRegistered();
+        m_ensuringScreenRecording = false;
+        qInfo() << "Application: screen recording granted by CGPreflight";
         return true;
     }
-    if (!m_requestedScreenRecording) {
+
+    const bool probe = MacPermissions::probeScreenRecording();
+    qInfo() << "Application: ensureScreenRecording probe=" << probe;
+    if (probe) {
+        LocalStore::setScreenRecordingRegistered();
+        m_ensuringScreenRecording = false;
+        qInfo() << "Application: screen recording granted by ScreenCaptureKit probe";
+        return true;
+    }
+
+    if (!LocalStore::screenRecordingRegistered() && !m_requestedScreenRecording) {
         m_requestedScreenRecording = true;
-        qInfo() << "Application: requesting screen recording once this process";
+        qInfo() << "Application: first TCC register via CGRequestScreenCaptureAccess";
         MacPermissions::requestScreenRecording();
-        if (MacPermissions::hasScreenRecording()) {
+        LocalStore::setScreenRecordingRegistered();
+        if (MacPermissions::hasScreenRecording() || MacPermissions::probeScreenRecording()) {
+            m_ensuringScreenRecording = false;
             qInfo() << "Application: screen recording granted after request";
             return true;
         }
-        qInfo() << "Application: system Screen Recording prompt shown, wait for toggle then Quit";
-        return false;
-    }
-    qInfo() << "Application: skip CGRequestScreenCaptureAccess already asked this process";
-    if (!m_promptedScreenRecording) {
-        m_promptedScreenRecording = true;
-        qInfo() << "Application: one-time Screen Recording prompt";
-        MacPermissions::openScreenRecordingSettings();
-        MacPermissions::activateApp();
-        QMessageBox box;
-        box.setWindowTitle(QStringLiteral("SeenShot"));
-        box.setText(ErrorCatalog::message(QStringLiteral("SCREEN_RECORDING_DENIED")));
-        auto *quitButton = box.addButton(QStringLiteral("Quit"), QMessageBox::AcceptRole);
-        box.addButton(QStringLiteral("OK"), QMessageBox::RejectRole);
-        box.exec();
-        if (box.clickedButton() == quitButton) {
-            qInfo() << "Application: quit so Screen Recording can apply to the next process";
-            qApp->quit();
-        }
+        qInfo() << "Application: CGRequestScreenCaptureAccess did not authorize this copy";
     } else {
-        qInfo() << "Application: skip Screen Recording prompt already shown this process";
+        qInfo() << "Application: skip CGRequestScreenCaptureAccess registered="
+                << LocalStore::screenRecordingRegistered()
+                << " requestedThisProcess=" << m_requestedScreenRecording;
     }
+
+    qWarning() << "Application: Screen Recording not effective for this copy, showing help";
+    showScreenRecordingHelp();
+    m_ensuringScreenRecording = false;
     return false;
+}
+
+void Application::showScreenRecordingHelp()
+{
+    const QString path = MacPermissions::runningAppPath();
+    qInfo() << "Application: showScreenRecordingHelp path=" << path;
+    MacPermissions::activateApp();
+    QMessageBox box;
+    box.setWindowTitle(QStringLiteral("SeenShot"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(QStringLiteral("SeenShot needs Screen Recording to capture your screen."));
+    box.setInformativeText(
+        QStringLiteral("This copy:\n%1\n\n"
+                       "Open System Settings → Privacy & Security → Screen Recording.\n\n"
+                       "If the SeenShot switch is already on, turn it off, then turn it on again. "
+                       "macOS keeps a separate switch for each signed copy of SeenShot. "
+                       "The switch that is on may belong to another SeenShot.app on this Mac.\n\n"
+                       "Then click Restart SeenShot.")
+            .arg(path));
+    QPushButton *openBtn = box.addButton(QStringLiteral("Open System Settings"), QMessageBox::AcceptRole);
+    QPushButton *restartBtn = box.addButton(QStringLiteral("Restart SeenShot"), QMessageBox::ActionRole);
+    box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+    box.setDefaultButton(openBtn);
+    box.exec();
+    if (box.clickedButton() == openBtn) {
+        qInfo() << "Application: Screen Recording help Open System Settings";
+        MacPermissions::openScreenRecordingSettings();
+        return;
+    }
+    if (box.clickedButton() == restartBtn) {
+        qInfo() << "Application: Screen Recording help Restart SeenShot";
+        MacPermissions::relaunchApp();
+        return;
+    }
+    qInfo() << "Application: Screen Recording help cancelled";
 }
 
 bool Application::eventFilter(QObject *watched, QEvent *event)
@@ -209,7 +259,17 @@ void Application::handleOpenUrl(const QUrl &url)
     }
     const QString dest = url.host().isEmpty() ? url.path() : url.host();
     if (dest == QLatin1String("oauth") || dest == QLatin1String("/oauth")) {
-        qInfo() << "Application: oauth callback handled by ASWebAuthenticationSession";
+        QString error;
+        const bool ok = m_auth->completeWebsiteCallback(url, &error);
+        qInfo() << "Application: oauth callback ok=" << ok << " error=" << error;
+        if (!ok && !error.isEmpty() && error != QLatin1String("AUTH_OAUTH_DENIED")) {
+            MacPermissions::activateApp();
+            QMessageBox::warning(nullptr, QStringLiteral("SeenShot"), ErrorCatalog::message(error));
+            return;
+        }
+        if (m_auth->hasSession()) {
+            openSettings();
+        }
         return;
     }
     QString error;
@@ -266,7 +326,7 @@ void Application::beginCapture()
         m_editor->abortPhoto();
     }
     if (!ensureScreenRecording()) {
-        qWarning() << "Application: capture blocked until Screen Recording applies after Quit";
+        qWarning() << "Application: capture blocked until Screen Recording TCC applies";
         return;
     }
     setCaptureFlag(true);
@@ -313,7 +373,7 @@ void Application::beginFullScreenCapture()
         m_editor->abortPhoto();
     }
     if (!ensureScreenRecording()) {
-        qWarning() << "Application: full screen blocked until Screen Recording applies after Quit";
+        qWarning() << "Application: full screen blocked until Screen Recording TCC applies";
         return;
     }
     QScreen *screen = QGuiApplication::screenAt(QCursor::pos());

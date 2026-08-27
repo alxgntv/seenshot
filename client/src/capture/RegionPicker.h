@@ -1,7 +1,10 @@
 #pragma once
 
+#include <QPoint>
 #include <QRect>
 #include <QWidget>
+
+class QMoveEvent;
 
 // ─── Ariadne's Thread [AT-0010] ─────────────────────
 // What: Fullscreen drag overlay to pick a capture region
@@ -26,9 +29,14 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
 
 private:
-    QPoint m_origin;
+    void syncRubberFromGlobal(const QPoint &globalNow);
+    QRect screenUnion() const;
+
+    QPoint m_originGlobal;
     QRect m_rubber;
     bool m_dragging = false;
+    bool m_snapping = false;
 };

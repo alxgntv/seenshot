@@ -8,9 +8,14 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QObject>
+#include <QRegularExpression>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -48,7 +53,10 @@ QString mapIdentityMessage(QString message)
         return QStringLiteral("AUTH_PROVIDER_DISABLED");
     }
     if (message == QLatin1String("INVALID_CONTINUE_URI")) {
-        return QStringLiteral("GOOGLE_SIGN_IN_UNAVAILABLE");
+        return QStringLiteral("AUTH_LINK_INVALID");
+    }
+    if (message == QLatin1String("INVALID_CUSTOM_TOKEN") || message == QLatin1String("CREDENTIAL_MISMATCH")) {
+        return QStringLiteral("AUTH_OAUTH_FAILED");
     }
     return QStringLiteral("AUTH_REFRESH_FAILED");
 }
@@ -60,6 +68,128 @@ QString identityErrorCode(const QByteArray &body)
     const QString code = mapIdentityMessage(message);
     qWarning() << "FirebaseAuthClient: identity error message=" << message << " code=" << code;
     return code;
+}
+
+QMutex g_blocklistMutex;
+QSet<QString> g_blocklist;
+bool g_blocklistReady = false;
+
+bool ensureDisposableBlocklist(QNetworkAccessManager *nam, QString *errorCode)
+{
+    {
+        QMutexLocker locker(&g_blocklistMutex);
+        if (g_blocklistReady) {
+            qInfo() << "FirebaseAuthClient: disposable blocklist cached size=" << g_blocklist.size();
+            return true;
+        }
+    }
+    const QUrl url(QStringLiteral(
+        "https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/refs/heads/main/"
+        "disposable_email_blocklist.conf"));
+    qInfo() << "FirebaseAuthClient: fetching disposable blocklist";
+    QNetworkRequest request(url);
+    QNetworkReply *reply = nam->get(request);
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    timer.start(20000);
+    loop.exec();
+    if (!reply->isFinished()) {
+        qWarning() << "FirebaseAuthClient: disposable blocklist timeout";
+        reply->abort();
+        reply->deleteLater();
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_REFRESH_FAILED");
+        }
+        return false;
+    }
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray body = reply->readAll();
+    const QNetworkReply::NetworkError error = reply->error();
+    reply->deleteLater();
+    qInfo() << "FirebaseAuthClient: disposable blocklist status=" << status << " bytes=" << body.size()
+            << " error=" << error;
+    if (status < 200 || status >= 300) {
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_REFRESH_FAILED");
+        }
+        return false;
+    }
+    QSet<QString> parsed;
+    const QString text = QString::fromUtf8(body);
+    const QStringList lines = text.split(QRegularExpression(QStringLiteral("\\r?\\n")));
+    for (const QString &raw : lines) {
+        const QString line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QLatin1String("//"))) {
+            continue;
+        }
+        parsed.insert(line.toLower());
+    }
+    qInfo() << "FirebaseAuthClient: disposable blocklist parsed size=" << parsed.size();
+    if (parsed.isEmpty()) {
+        qWarning() << "FirebaseAuthClient: disposable blocklist empty";
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_REFRESH_FAILED");
+        }
+        return false;
+    }
+    QMutexLocker locker(&g_blocklistMutex);
+    if (!g_blocklistReady) {
+        g_blocklist = parsed;
+        g_blocklistReady = true;
+    }
+    return true;
+}
+
+bool isDisposableEmail(const QString &email)
+{
+    const int at = email.indexOf(QLatin1Char('@'));
+    if (at < 0) {
+        qWarning() << "FirebaseAuthClient: disposable check missing @";
+        return false;
+    }
+    const QString domain = email.mid(at + 1).trimmed().toLower();
+    const QStringList domainParts = domain.split(QLatin1Char('.'));
+    QMutexLocker locker(&g_blocklistMutex);
+    for (int i = 0; i < domainParts.size() - 1; ++i) {
+        QString candidate;
+        for (int j = i; j < domainParts.size(); ++j) {
+            if (j > i) {
+                candidate += QLatin1Char('.');
+            }
+            candidate += domainParts.at(j);
+        }
+        if (g_blocklist.contains(candidate)) {
+            qWarning() << "FirebaseAuthClient: disposable domain=" << candidate
+                       << " domainParts=" << domainParts.size();
+            return true;
+        }
+    }
+    qInfo() << "FirebaseAuthClient: permanent email domainParts=" << domainParts.size();
+    return false;
+}
+
+// ─── Ariadne's Thread [AT-0188] ─────────────────────
+// What: Reject throwaway mail before Identity Toolkit sign-in and sign-up
+// Why:  Official disposable-email-domains list; same message as the website
+// Date: 2026-08-27
+// Related: [AT-0186] backend→disposableEmail.ts:isDisposableEmail, seenshot-web→src/disposableEmail.ts
+// ─────────────────────────────────────────────────────
+bool allowPermanentEmail(QNetworkAccessManager *nam, const QString &email, QString *errorCode)
+{
+    if (!ensureDisposableBlocklist(nam, errorCode)) {
+        qWarning() << "FirebaseAuthClient: disposable blocklist unavailable";
+        return false;
+    }
+    if (isDisposableEmail(email)) {
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_DISPOSABLE_EMAIL");
+        }
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -146,6 +276,10 @@ bool FirebaseAuthClient::signInEmail(const QString &email, const QString &passwo
         }
         return false;
     }
+    qInfo() << "FirebaseAuthClient: signInEmail emailChars=" << email.size();
+    if (!allowPermanentEmail(m_nam, email, errorCode)) {
+        return false;
+    }
     QJsonObject body;
     body.insert(QStringLiteral("email"), email);
     body.insert(QStringLiteral("password"), password);
@@ -159,7 +293,7 @@ bool FirebaseAuthClient::signInEmail(const QString &email, const QString &passwo
 }
 
 // ─── Ariadne's Thread [AT-0084] ─────────────────────
-// What: signUp, reset, email link, Google idp, lookup on the same REST client
+// What: signUp, reset, email link, lookup on the same REST client
 // Why:  PRD-04 forbids a second auth stack next to Identity Toolkit
 // Date: 2026-08-25
 // Related: [AT-0016] FirebaseAuthClient.h, docs/PRD-04-settings-auth.md
@@ -167,12 +301,15 @@ bool FirebaseAuthClient::signInEmail(const QString &email, const QString &passwo
 bool FirebaseAuthClient::signUpEmail(const QString &email, const QString &password, FirebaseTokens *out,
                                     QString *errorCode)
 {
+    qInfo() << "FirebaseAuthClient: signUpEmail emailChars=" << email.size();
+    if (!allowPermanentEmail(m_nam, email, errorCode)) {
+        return false;
+    }
     QJsonObject body;
     body.insert(QStringLiteral("email"), email);
     body.insert(QStringLiteral("password"), password);
     body.insert(QStringLiteral("returnSecureToken"), true);
     QByteArray response;
-    qInfo() << "FirebaseAuthClient: signUpEmail";
     if (!postJson(identityUrl(QStringLiteral("accounts:signUp")), QJsonDocument(body).toJson(QJsonDocument::Compact),
                   &response, errorCode)) {
         return false;
@@ -182,24 +319,31 @@ bool FirebaseAuthClient::signUpEmail(const QString &email, const QString &passwo
 
 bool FirebaseAuthClient::sendPasswordReset(const QString &email, QString *errorCode)
 {
+    qInfo() << "FirebaseAuthClient: sendPasswordReset emailChars=" << email.size();
+    if (!allowPermanentEmail(m_nam, email, errorCode)) {
+        return false;
+    }
     QJsonObject body;
     body.insert(QStringLiteral("requestType"), QStringLiteral("PASSWORD_RESET"));
     body.insert(QStringLiteral("email"), email);
     QByteArray response;
-    qInfo() << "FirebaseAuthClient: sendPasswordReset";
     return postJson(identityUrl(QStringLiteral("accounts:sendOobCode")),
                     QJsonDocument(body).toJson(QJsonDocument::Compact), &response, errorCode);
 }
 
 bool FirebaseAuthClient::sendEmailLink(const QString &email, QString *errorCode)
 {
+    qInfo() << "FirebaseAuthClient: sendEmailLink continue=" << Config::emailLinkContinueUrl()
+            << " emailChars=" << email.size();
+    if (!allowPermanentEmail(m_nam, email, errorCode)) {
+        return false;
+    }
     QJsonObject body;
     body.insert(QStringLiteral("requestType"), QStringLiteral("EMAIL_SIGNIN"));
     body.insert(QStringLiteral("email"), email);
     body.insert(QStringLiteral("continueUrl"), Config::emailLinkContinueUrl());
     body.insert(QStringLiteral("canHandleCodeInApp"), true);
     QByteArray response;
-    qInfo() << "FirebaseAuthClient: sendEmailLink continue=" << Config::emailLinkContinueUrl();
     return postJson(identityUrl(QStringLiteral("accounts:sendOobCode")),
                     QJsonDocument(body).toJson(QJsonDocument::Compact), &response, errorCode);
 }
@@ -207,11 +351,14 @@ bool FirebaseAuthClient::sendEmailLink(const QString &email, QString *errorCode)
 bool FirebaseAuthClient::signInEmailLink(const QString &email, const QString &oobCode, FirebaseTokens *out,
                                          QString *errorCode)
 {
+    qInfo() << "FirebaseAuthClient: signInEmailLink emailChars=" << email.size();
+    if (!allowPermanentEmail(m_nam, email, errorCode)) {
+        return false;
+    }
     QJsonObject body;
     body.insert(QStringLiteral("email"), email);
     body.insert(QStringLiteral("oobCode"), oobCode);
     QByteArray response;
-    qInfo() << "FirebaseAuthClient: signInEmailLink";
     if (!postJson(identityUrl(QStringLiteral("accounts:signInWithEmailLink")),
                   QJsonDocument(body).toJson(QJsonDocument::Compact), &response, errorCode)) {
         return false;
@@ -219,52 +366,28 @@ bool FirebaseAuthClient::signInEmailLink(const QString &email, const QString &oo
     return parseTokens(response, out, errorCode);
 }
 
-// ─── Ariadne's Thread [AT-0089] ─────────────────────
-// What: createAuthUri + signInWithIdp for the Firebase Auth handler
-// Why:  Official Identity Toolkit Google flow; continueUri is authorized authDomain
-// Date: 2026-08-25
-// Related: [AT-0097] Config.cpp:firebaseAuthHandlerUrl, [AT-0098] MacGoogleAuth.mm
+// ─── Ariadne's Thread [AT-0192] ─────────────────────
+// What: Exchange a Firebase custom token for id and refresh tokens
+// Why:  Website OAuth token endpoint mints a custom token for the Mac public client
+// Date: 2026-08-27
+// Related: [AT-0193] AuthSession.cpp:completeWebsiteCallback, [AT-0040] seenshot-web→src/oauth.ts
 // ─────────────────────────────────────────────────────
-bool FirebaseAuthClient::createAuthUri(const QString &continueUri, QString *authUri, QString *sessionId,
-                                       QString *errorCode)
+bool FirebaseAuthClient::signInWithCustomToken(const QString &customToken, FirebaseTokens *out, QString *errorCode)
 {
-    QJsonObject body;
-    body.insert(QStringLiteral("providerId"), QStringLiteral("google.com"));
-    body.insert(QStringLiteral("continueUri"), continueUri);
-    body.insert(QStringLiteral("authType"), QStringLiteral("signInWithRedirect"));
-    QByteArray response;
-    qInfo() << "FirebaseAuthClient: createAuthUri continue=" << continueUri;
-    if (!postJson(identityUrl(QStringLiteral("accounts:createAuthUri")),
-                  QJsonDocument(body).toJson(QJsonDocument::Compact), &response, errorCode)) {
-        return false;
-    }
-    const QJsonObject json = QJsonDocument::fromJson(response).object();
-    *authUri = json.value(QStringLiteral("authUri")).toString();
-    *sessionId = json.value(QStringLiteral("sessionId")).toString();
-    qInfo() << "FirebaseAuthClient: createAuthUri authUriChars=" << authUri->size()
-            << " sessionIdChars=" << sessionId->size();
-    if (authUri->isEmpty() || sessionId->isEmpty()) {
-        qWarning() << "FirebaseAuthClient: createAuthUri missing authUri or sessionId";
+    const QString key = Config::firebaseApiKey();
+    if (key.isEmpty()) {
+        qWarning() << "FirebaseAuthClient: missing API key";
         if (errorCode) {
-            *errorCode = QStringLiteral("GOOGLE_SIGN_IN_UNAVAILABLE");
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
         }
         return false;
     }
-    return true;
-}
-
-bool FirebaseAuthClient::signInWithIdpRedirect(const QString &requestUri, const QString &sessionId, FirebaseTokens *out,
-                                               QString *errorCode)
-{
+    qInfo() << "FirebaseAuthClient: signInWithCustomToken chars=" << customToken.size();
     QJsonObject body;
-    body.insert(QStringLiteral("requestUri"), requestUri);
-    body.insert(QStringLiteral("sessionId"), sessionId);
-    body.insert(QStringLiteral("returnIdpCredential"), true);
+    body.insert(QStringLiteral("token"), customToken);
     body.insert(QStringLiteral("returnSecureToken"), true);
     QByteArray response;
-    qInfo() << "FirebaseAuthClient: signInWithIdp requestUriChars=" << requestUri.size()
-            << " sessionIdChars=" << sessionId.size();
-    if (!postJson(identityUrl(QStringLiteral("accounts:signInWithIdp")),
+    if (!postJson(identityUrl(QStringLiteral("accounts:signInWithCustomToken")),
                   QJsonDocument(body).toJson(QJsonDocument::Compact), &response, errorCode)) {
         return false;
     }

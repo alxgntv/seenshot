@@ -2,7 +2,6 @@
 
 #include <QWidget>
 
-class AccountSignInPanel;
 class AuthSession;
 class CloudClient;
 class QCheckBox;
@@ -23,6 +22,7 @@ protected:
     void showEvent(QShowEvent *event) override;
 
 private slots:
+    void openSignIn();
     void signOut();
     void exportData();
     void deleteAccount();
@@ -44,7 +44,7 @@ private:
     QCheckBox *m_launchAtLogin = nullptr;
     QGroupBox *m_signedOutBox = nullptr;
     QGroupBox *m_signedInBox = nullptr;
-    AccountSignInPanel *m_signInPanel = nullptr;
+    QPushButton *m_signInBtn = nullptr;
     QLabel *m_profile = nullptr;
     QPushButton *m_signOutBtn = nullptr;
     QPushButton *m_proBtn = nullptr;

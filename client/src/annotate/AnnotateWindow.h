@@ -16,6 +16,7 @@
 
 class QAction;
 class QActionGroup;
+class QCheckBox;
 class QFrame;
 class QGraphicsDropShadowEffect;
 class QLabel;
@@ -23,6 +24,7 @@ class QProgressBar;
 class QPushButton;
 class QSlider;
 class QTimer;
+class QToolBar;
 class QToolButton;
 class QWidget;
 class QGraphicsItem;
@@ -41,7 +43,6 @@ class QShowEvent;
 class QUndoStack;
 class AuthSession;
 class CloudClient;
-class HueColorSlider;
 class AnnotateTextItem;
 class AnnotatePhotoItem;
 class CameraCapture;
@@ -108,15 +109,17 @@ private slots:
     void setToolText();
     void setToolBlur();
     void setHighlightStyleTool(HighlightStyle style);
-    void onHuePressed();
-    void onHueChanged(int hue);
-    void onHueReleased();
+    void setAnnotateColor(const QColor &color);
     void onStrokePressed();
     void onStrokeChanged(int width);
     void onStrokeReleased();
     void onFillPressed();
     void onFillChanged(int percent);
     void onFillReleased();
+    void onTextSizePressed();
+    void onTextSizeChanged(int size);
+    void onTextSizeReleased();
+    void onTextOutlineToggled(bool on);
     void setBackgroundPreset(int preset);
     void onRadiusChanged(int radius);
     void onShadowChanged(int amount);
@@ -132,15 +135,35 @@ private:
     void onSceneReleased(const QPointF &pos);
     QGraphicsItem *lastColorableItem() const;
     QGraphicsItem *lastHighlightItem() const;
+    QGraphicsItem *lastAnnotationItem() const;
+    QGraphicsItem *lastTextSizedItem() const;
+    bool isSquareOrStepsItem(const QGraphicsItem *item) const;
+    void updateStrokeFillVisibility();
+    void updateTextSizeLabel();
     AnnotateTextItem *textItemAt(const QPointF &scenePos) const;
     AnnotatePhotoItem *photoItemAt(const QPointF &scenePos) const;
     QGraphicsItem *annotationItemAt(const QPointF &scenePos) const;
     QGraphicsItem *selectedAnnotation() const;
     void selectAnnotation(QGraphicsItem *item);
-    enum class SelectHandle { None, Move, TopLeft, TopRight, BottomLeft, BottomRight, P1, P2 };
+    enum class SelectHandle {
+        None,
+        Move,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+        Top,
+        Bottom,
+        Left,
+        Right,
+        P1,
+        P2
+    };
     bool hitsScenePoint(const QPointF &target, const QPointF &scenePos) const;
+    bool hitsSceneEdge(const QPointF &a, const QPointF &b, const QPointF &scenePos) const;
     SelectHandle hitSelectHandle(QGraphicsItem *item, const QPointF &scenePos) const;
     void applySelectResize(const QPointF &scenePos);
+    void applyPhotoScaleFromHandle(AnnotatePhotoItem *photo, const QPointF &scenePos);
     void applySelectMove(const QPointF &scenePos);
     void commitSelectGesture();
     void deleteSelectedAnnotation();
@@ -153,7 +176,10 @@ private:
     void startPhotoWithFollow(PhotoFollow follow);
     void runPhotoFollow();
     bool ensurePhotoPreview();
-    void showPhotoCaptureMenu();
+    void showPhotoChoice();
+    void hidePhotoChoice();
+    void layoutPhotoChoice();
+    void showPhotoChoiceCountdown(int seconds);
     void beginPhotoFlashCapture();
     void finishPhotoStill(const QImage &image);
     bool photoCaptureBusy() const;
@@ -179,6 +205,7 @@ private:
     bool isOnShot(const QPointF &scenePos) const;
     QPointF clampToShot(const QPointF &scenePos) const;
     void applyWindowScreenLayout();
+    void layoutToolsBar();
     void fitShotToWindow();
     void applyCanvasChrome();
     QRectF canvasRect() const;
@@ -187,6 +214,9 @@ private:
     qreal maxTextWidthOnShot(const AnnotateTextItem *item) const;
     void showError(const QString &code);
     bool ensureOnlineSignedIn(QString *errorCode);
+    void setShareBusy(bool busy);
+    void setShareProgress(qint64 sent, qint64 total);
+    void showShareLink(const QString &url);
 
     QImage m_source;
     QGraphicsScene *m_scene = nullptr;
@@ -195,9 +225,20 @@ private:
     QGraphicsRectItem *m_background = nullptr;
     QGraphicsDropShadowEffect *m_photoShadow = nullptr;
     QUndoStack *m_undo = nullptr;
-    HueColorSlider *m_hue = nullptr;
+    QToolBar *m_toolsBar = nullptr;
+    QToolButton *m_colorButton = nullptr;
+    QActionGroup *m_colorGroup = nullptr;
     QSlider *m_stroke = nullptr;
     QSlider *m_fill = nullptr;
+    QLabel *m_strokeLabel = nullptr;
+    QLabel *m_fillLabel = nullptr;
+    QAction *m_strokeLabelAction = nullptr;
+    QAction *m_strokeAction = nullptr;
+    QAction *m_fillLabelAction = nullptr;
+    QAction *m_fillAction = nullptr;
+    QSlider *m_textSizeSlider = nullptr;
+    QLabel *m_textSizeValue = nullptr;
+    QCheckBox *m_textOutlineBox = nullptr;
     QToolButton *m_bgButton = nullptr;
     QActionGroup *m_bgGroup = nullptr;
     int m_bgPreset = 0;
@@ -213,13 +254,19 @@ private:
     QSlider *m_radius = nullptr;
     QLabel *m_shadowLabel = nullptr;
     QSlider *m_shadow = nullptr;
+    QAction *m_radiusLabelAction = nullptr;
+    QAction *m_radiusAction = nullptr;
+    QAction *m_shadowLabelAction = nullptr;
+    QAction *m_shadowAction = nullptr;
     QAction *m_undoAction = nullptr;
     QAction *m_redoAction = nullptr;
     Tool m_tool = Tool::Highlight;
     HighlightStyle m_highlightStyle = HighlightStyle::Fill;
-    QColor m_color = QColor::fromHsv(0, 255, 230);
+    QColor m_color = QColor(255, 59, 48);
     int m_strokeWidth = 2;
     int m_fillAlpha = 80;
+    int m_textSize = 18;
+    bool m_textOutline = false;
     int m_blurRadius = 8;
     int m_cornerRadius = 16;
     int m_shadowAmount = 18;
@@ -240,12 +287,19 @@ private:
     bool m_strokeGestureActive = false;
     int m_fillGestureId = 0;
     bool m_fillGestureActive = false;
+    int m_textSizeGestureId = 0;
+    bool m_textSizeGestureActive = false;
     bool m_didScreenLayout = false;
     AuthSession *m_auth = nullptr;
     CloudClient *m_cloud = nullptr;
+    QString m_fileId;
     QString m_cloudShotId;
     CameraCapture *m_camera = nullptr;
     QToolButton *m_photoButton = nullptr;
+    QFrame *m_photoChoice = nullptr;
+    QPushButton *m_photoPictureButton = nullptr;
+    QPushButton *m_photoTimer5Button = nullptr;
+    QLabel *m_photoChoiceCount = nullptr;
     QWidget *m_photoOverlay = nullptr;
     QLabel *m_photoCountdown = nullptr;
     QWidget *m_photoFlash = nullptr;
@@ -263,6 +317,7 @@ private:
     QImage m_pendingStill;
     AnnotatePhotoItem *m_movingPhoto = nullptr;
     AnnotatePhotoItem *m_scalingPhoto = nullptr;
+    SelectHandle m_photoScaleHandle = SelectHandle::None;
     QPointF m_photoOldPos;
     qreal m_photoOldScale = 1;
     int m_photoMoveGestureId = 0;
@@ -273,6 +328,7 @@ private:
     bool m_selectWasSelected = false;
     QPointF m_selectPressScene;
     QPointF m_selectOldPos;
+    qreal m_selectOldWidth = 160;
     QRectF m_selectOldRect;
     QPointF m_selectOldP1;
     QPointF m_selectOldP2;
@@ -283,4 +339,8 @@ private:
     QPushButton *m_updateButton = nullptr;
     QProgressBar *m_updateBar = nullptr;
     QLabel *m_updateStatus = nullptr;
+    QPushButton *m_shareBtn = nullptr;
+    QProgressBar *m_shareBusy = nullptr;
+    QProgressBar *m_shareProgress = nullptr;
+    bool m_shareUploading = false;
 };

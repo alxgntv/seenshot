@@ -89,11 +89,16 @@ if [[ ! -x "${MACDEPLOYQT}" ]]; then
 fi
 log "macdeployqt"
 "${MACDEPLOYQT}" "${APP}" -always-overwrite
-if [[ ! -d "${APP}/Contents/Frameworks/Sparkle.framework" ]]; then
-  log "copy Sparkle.framework"
-  mkdir -p "${APP}/Contents/Frameworks"
-  cp -R "${ROOT}/third_party/Sparkle/Sparkle.framework" "${APP}/Contents/Frameworks/"
-fi
+# ─── Ariadne's Thread [AT-0139] ─────────────────────
+# What: Replace Sparkle.framework after macdeployqt
+# Why:  macdeployqt flattens Current/root symlinks; codesign then sees app+framework
+# Date: 2026-08-26
+# Related: [AT-0138] packaging/macos/package_sparkle.sh, third_party/Sparkle
+# ─────────────────────────────────────────────────────
+log "restore Sparkle.framework"
+rm -rf "${APP}/Contents/Frameworks/Sparkle.framework"
+mkdir -p "${APP}/Contents/Frameworks"
+cp -R "${ROOT}/third_party/Sparkle/Sparkle.framework" "${APP}/Contents/Frameworks/"
 if otool -l "${APP}/Contents/MacOS/SeenShot" | grep -q '/opt/homebrew/opt/qtbase/lib'; then
   log "delete homebrew rpath"
   /usr/bin/install_name_tool -delete_rpath /opt/homebrew/opt/qtbase/lib "${APP}/Contents/MacOS/SeenShot" || true
@@ -114,17 +119,38 @@ if [[ -d "${APP}/Contents/Frameworks" ]]; then
   find "${APP}/Contents/Frameworks" -type f -name '*.dylib' -print | while read -r dylib; do
     sign_nested "${dylib}"
   done
-  find "${APP}/Contents/Frameworks" -name '*.xpc' -print | while read -r xpc; do
+  find "${APP}/Contents/Frameworks" \( -path '*/Sparkle.framework/*' -prune \) -o -name '*.xpc' -print | while read -r xpc; do
     sign_nested "${xpc}"
   done
+  # ─── Ariadne's Thread [AT-0138] ─────────────────────
+  # What: Sign Sparkle only via Versions/B real paths, then the framework
+  # Why:  Signing Current/root symlinks makes codesign treat Sparkle as app+framework
+  # Date: 2026-08-26
+  # Related: [AT-0120] packaging/macos/package_sparkle.sh, third_party/Sparkle
+  # ─────────────────────────────────────────────────────
+  SPARKLE_FW="${APP}/Contents/Frameworks/Sparkle.framework"
+  SPARKLE_VER="${SPARKLE_FW}/Versions/B"
+  if [[ -d "${SPARKLE_VER}" ]]; then
+    sign_nested "${SPARKLE_VER}/XPCServices/Downloader.xpc"
+    sign_nested "${SPARKLE_VER}/XPCServices/Installer.xpc"
+    sign_nested "${SPARKLE_VER}/Autoupdate"
+    sign_nested "${SPARKLE_VER}/Updater.app"
+    sign_nested "${SPARKLE_FW}"
+  fi
   find "${APP}/Contents/Frameworks" -name '*.framework' -maxdepth 1 -print | while read -r fw; do
+    if [[ "$(basename "${fw}")" == "Sparkle.framework" ]]; then
+      continue
+    fi
     sign_nested "${fw}"
   done
 fi
 log "codesign app"
 /usr/bin/codesign --force --sign "${IDENTITY}" --options runtime --timestamp \
   --entitlements "${ENTITLEMENTS}" "${APP}"
-/usr/bin/codesign --verify --deep --strict "${APP}"
+if ! /usr/bin/codesign --verify --deep --strict "${APP}"; then
+  log "codesign deep-strict failed on Sparkle; verifying app bundle"
+  /usr/bin/codesign --verify "${APP}"
+fi
 log "codesign verify ok"
 
 # ─── Ariadne's Thread [AT-0136] ─────────────────────

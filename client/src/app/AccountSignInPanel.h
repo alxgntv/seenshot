@@ -4,14 +4,13 @@
 
 class AuthSession;
 class QLabel;
-class QLineEdit;
 class QPushButton;
 
-// ─── Ariadne's Thread [AT-0109] ─────────────────────
-// What: One signed-out form: Google, email, password, link
-// Why:  Settings and Share Link must use the same AuthSession, not a second login
-// Date: 2026-08-26
-// Related: [AT-0085] SettingsWindow.cpp, [AT-0110] SignInDialog.cpp
+// ─── Ariadne's Thread [AT-0195] ─────────────────────
+// What: Signed-out form is one Continue on seenshot.app button
+// Why:  Email/password lives on the website; Mac uses Authorization Code + PKCE
+// Date: 2026-08-27
+// Related: [AT-0193] AuthSession.cpp:startWebsiteSignIn, [AT-0147] SignInDialog.h
 // ─────────────────────────────────────────────────────
 class AccountSignInPanel : public QWidget {
     Q_OBJECT
@@ -20,25 +19,14 @@ public:
     void clearSecrets();
 
 private slots:
-    void signIn();
-    void createAccount();
-    void forgotPassword();
-    void sendEmailLink();
-    void signInGoogle();
+    void continueOnWebsite();
+    void onWebsiteSignInSettled(const QString &errorCode);
 
 private:
     void setAuthBusy(bool busy);
-    bool requireEmail(QString *errorCode) const;
-    bool requireEmailPassword(QString *errorCode) const;
     void showAuthError(const QString &code);
 
     AuthSession *m_auth = nullptr;
-    QLineEdit *m_email = nullptr;
-    QLineEdit *m_password = nullptr;
     QLabel *m_authStatus = nullptr;
-    QPushButton *m_googleBtn = nullptr;
-    QPushButton *m_signInBtn = nullptr;
-    QPushButton *m_createBtn = nullptr;
-    QPushButton *m_forgotBtn = nullptr;
-    QPushButton *m_linkBtn = nullptr;
+    QPushButton *m_continueBtn = nullptr;
 };

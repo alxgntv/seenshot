@@ -45,6 +45,7 @@ private:
     void restoreEditorIfNeeded();
     void setCaptureFlag(bool capturing);
     bool ensureScreenRecording();
+    void showScreenRecordingHelp();
     void teardownNativeWindows();
     void handleOpenUrl(const QUrl &url);
 
@@ -59,5 +60,5 @@ private:
     QPointer<SettingsWindow> m_settings;
     bool m_capturing = false;
     bool m_requestedScreenRecording = false;
-    bool m_promptedScreenRecording = false;
+    bool m_ensuringScreenRecording = false;
 };

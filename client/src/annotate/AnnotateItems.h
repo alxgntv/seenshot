@@ -20,6 +20,8 @@ constexpr int kAnnotateRoleBlurRadius = 37;
 constexpr int kAnnotateRoleBlurSource = 38;
 constexpr int kAnnotateRoleP1 = 39;
 constexpr int kAnnotateRoleP2 = 40;
+constexpr int kAnnotateRoleTextSize = 41;
+constexpr int kAnnotateRoleTextOutline = 42;
 
 enum class AnnotateKind {
     None = 0,
@@ -65,6 +67,10 @@ QPointF annotateP2(const QGraphicsItem *item);
 void setAnnotateEndpoints(QGraphicsItem *item, const QPointF &p1, const QPointF &p2);
 QPainterPath arrowPath(const QPointF &from, const QPointF &to);
 void setArrowEndpoints(QGraphicsPathItem *item, const QPointF &from, const QPointF &to);
+int annotateTextSize(const QGraphicsItem *item);
+bool annotateTextOutline(const QGraphicsItem *item);
+void applyAnnotateTextSize(QGraphicsItem *item, int size);
+void applyAnnotateTextOutline(QGraphicsItem *item, bool on);
 
 // ─── Ariadne's Thread [AT-0040] ─────────────────────
 // What: In-place text block with wrap width and resize grip
@@ -83,9 +89,15 @@ public:
     void beginEdit();
     void endEdit();
     bool isEditing() const;
+    void setTextSize(int size);
+    int textSize() const;
+    void setTextOutline(bool on);
+    bool textOutline() const;
+    void applyTextStyle();
 
-protected:
-    void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
+private:
+    int m_textSize = 18;
+    bool m_textOutline = false;
 };
 
 // ─── Ariadne's Thread [AT-0041] ─────────────────────
@@ -103,12 +115,19 @@ public:
     int number() const;
     int seq() const;
     void applyColor(const QColor &color);
+    void setDigitSize(int size);
+    int digitSize() const;
+    void setTextOutline(bool on);
+    bool textOutline() const;
+    qreal badgeRadius() const;
 
 protected:
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
 
 private:
     int m_number = 1;
+    int m_digitSize = 14;
+    bool m_textOutline = false;
     QColor m_ink = Qt::white;
 };
 
@@ -148,7 +167,4 @@ public:
     QRectF sceneBox() const;
     void setPhotoScale(qreal scale);
     qreal photoScale() const;
-
-protected:
-    void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
 };

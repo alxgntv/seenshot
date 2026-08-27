@@ -1,7 +1,7 @@
 #include "app/SettingsWindow.h"
 
-#include "app/AccountSignInPanel.h"
 #include "app/MacLoginItem.h"
+#include "app/SignInDialog.h"
 #include "auth/AuthSession.h"
 #include "cloud/CloudClient.h"
 #include "errors/ErrorCatalog.h"
@@ -72,17 +72,18 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     connect(m_launchAtLogin, &QCheckBox::toggled, this, &SettingsWindow::onLaunchAtLoginToggled);
     layout->addWidget(capture);
 
-    // ─── Ariadne's Thread [AT-0087] ─────────────────────
-    // What: Account signed-out is a stacked login: Google, then email fields, one Sign In
-    // Why:  QFormLayout left 80px fields and four equal buttons; looked broken
-    // Date: 2026-08-25
-    // Related: [AT-0085] SettingsWindow.cpp, docs/PRD-04-settings-auth.md
+    // ─── Ariadne's Thread [AT-0147] ─────────────────────
+    // What: Settings Account signed-out only opens SignInDialog
+    // Why:  Login form lives in one modal, not inside Settings
+    // Date: 2026-08-26
+    // Related: [AT-0110] SignInDialog.cpp, [AT-0085] SettingsWindow.cpp
     // ─────────────────────────────────────────────────────
     m_signedOutBox = new QGroupBox(QStringLiteral("Account"), this);
     auto *outLayout = new QVBoxLayout(m_signedOutBox);
     outLayout->setSpacing(10);
-    m_signInPanel = new AccountSignInPanel(m_auth, m_signedOutBox);
-    outLayout->addWidget(m_signInPanel);
+    m_signInBtn = new QPushButton(QStringLiteral("Sign In"), m_signedOutBox);
+    m_signInBtn->setMinimumHeight(32);
+    outLayout->addWidget(m_signInBtn);
     layout->addWidget(m_signedOutBox);
 
     m_signedInBox = new QGroupBox(QStringLiteral("Account"), this);
@@ -103,6 +104,7 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     inLayout->addWidget(m_deleteBtn);
     layout->addWidget(m_signedInBox);
 
+    connect(m_signInBtn, &QPushButton::clicked, this, &SettingsWindow::openSignIn);
     connect(m_signOutBtn, &QPushButton::clicked, this, &SettingsWindow::signOut);
     connect(m_exportBtn, &QPushButton::clicked, this, &SettingsWindow::exportData);
     connect(m_deleteBtn, &QPushButton::clicked, this, &SettingsWindow::deleteAccount);
@@ -259,20 +261,23 @@ void SettingsWindow::refreshQuota()
 
 void SettingsWindow::showAuthError(const QString &code)
 {
-    if (code == QLatin1String("GOOGLE_SIGN_IN_CANCELLED")) {
-        qInfo() << "SettingsWindow: Google cancelled";
-        return;
-    }
     const QString text = ErrorCatalog::message(code);
     QMessageBox::warning(this, QStringLiteral("SeenShot"), text);
+}
+
+void SettingsWindow::openSignIn()
+{
+    qInfo() << "SettingsWindow: openSignIn hasSession=" << m_auth->hasSession();
+    if (SignInDialog::execSignIn(m_auth, this)) {
+        qInfo() << "SettingsWindow: sign-in accepted";
+        return;
+    }
+    qInfo() << "SettingsWindow: sign-in cancelled";
 }
 
 void SettingsWindow::signOut()
 {
     m_auth->signOut();
-    if (m_signInPanel) {
-        m_signInPanel->clearSecrets();
-    }
     qInfo() << "SettingsWindow: signed out";
 }
 

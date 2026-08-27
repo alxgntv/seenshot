@@ -2,8 +2,7 @@ import Stripe from "stripe";
 import { verifyFirebaseToken } from "./auth";
 import { jsonError } from "./errors";
 import { sharePage, tosPage } from "./html";
-import { presignPut } from "./presign";
-import { Env, QuotaShard, quotaStub } from "./quota";
+import { Env, QuotaShard, isShotFileId, quotaStub } from "./quota";
 
 export { QuotaShard };
 
@@ -42,6 +41,9 @@ export default {
       if (code === "STORAGE_NEED_SIGN_IN" || code === "AUTH_REFRESH_FAILED") {
         return withCors(jsonError(code, 401));
       }
+      if (code === "AUTH_DISPOSABLE_EMAIL") {
+        return withCors(jsonError(code, 403));
+      }
       return withCors(jsonError(code === "CLOUD_IMAGE_REJECTED" ? code : "UNKNOWN_ERROR", 500));
     }
   },
@@ -70,11 +72,14 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/robots.txt") {
     return new Response("User-agent: *\nDisallow: /\n", { headers: { "content-type": "text/plain" } });
   }
-  if (url.pathname.startsWith("/s/")) {
-    return serveShare(url.pathname.slice(3), env);
+  if (url.pathname.startsWith("/screenshot/") || url.pathname.startsWith("/s/")) {
+    return serveShare(url, env);
   }
   if (url.pathname === "/v1/uploads/presign" && request.method === "POST") {
     return presign(request, env);
+  }
+  if (url.pathname.startsWith("/v1/uploads/put/") && request.method === "PUT") {
+    return putInbox(request, env);
   }
   if (url.pathname === "/v1/uploads/confirm" && request.method === "POST") {
     return confirm(request, env);
@@ -103,45 +108,91 @@ async function handle(request: Request, env: Env): Promise<Response> {
   return jsonError("UNKNOWN_ERROR", 404);
 }
 
-async function serveShare(publicId: string, env: Env): Promise<Response> {
-  const id = publicId.replace(/\.png$/, "");
+async function serveShare(url: URL, env: Env): Promise<Response> {
+  const prefix = url.pathname.startsWith("/screenshot/") ? "/screenshot/" : "/s/";
+  const id = decodeURIComponent(url.pathname.slice(prefix.length)).replace(/\.png$/, "");
   const banned = await env.DB.prepare("SELECT public_id FROM takedowns WHERE public_id = ?").bind(id).first();
   const row = banned
     ? null
-    : await env.DB.prepare("SELECT shot_id FROM shots WHERE public_id = ? AND visibility = 'public'")
-        .bind(id)
+    : await env.DB.prepare(
+        "SELECT shot_id FROM shots WHERE visibility = 'public' AND (public_id = ? OR shot_id = ?)",
+      )
+        .bind(id, id)
         .first();
-  const imageUrl = `${env.PUBLIC_BASE_URL}/p/${id}.png`;
+  // ─── Ariadne's Thread [AT-0167] ─────────────────────
+  // What: Load the share PNG from the R2 r2.dev public hostname
+  // Why:  No custom domain; r2.dev serves object key public/{id}.png
+  // Date: 2026-08-26
+  // Related: [AT-0167] backend/wrangler.toml, [AT-0032] backend/src/quota.ts:confirm
+  // ─────────────────────────────────────────────────────
+  const imageUrl = `${env.R2_PUBLIC_BASE_URL}/public/${id}.png`;
   const html = sharePage({
     publicId: id,
     imageUrl,
     missing: !row,
     abuseEmail: env.ABUSE_EMAIL,
   });
-  console.log(`index: share ${id} missing=${!row}`);
+  console.log(`index: share prefix=${prefix} id=${id} missing=${!row} banned=${Boolean(banned)}`);
   return new Response(html, {
     status: row ? 200 : 404,
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=60" },
   });
 }
 
+// ─── Ariadne's Thread [AT-0167] ─────────────────────
+// What: Return a Worker PUT URL for inbox instead of an R2 S3 presign
+// Why:  No custom domain and no R2 S3 tokens; write via the BUCKET binding
+// Date: 2026-08-26
+// Related: [AT-0033] backend/src/index.ts:handle, [AT-0032] backend/src/quota.ts:confirm
+// ─────────────────────────────────────────────────────
 async function presign(request: Request, env: Env): Promise<Response> {
   const uid = await uidFrom(request, env);
-  const body = (await request.json()) as { bytes?: number };
+  const body = (await request.json()) as { bytes?: number; fileId?: string };
   if (!body.bytes || body.bytes > 8 * 1024 * 1024) {
     return jsonError("CLOUD_IMAGE_REJECTED");
   }
-  const shotId = crypto.randomUUID();
-  const objectKey = `inbox/${uid}/${shotId}.png`;
-  const uploadUrl = await presignPut({
-    accountId: env.R2_ACCOUNT_ID,
-    accessKeyId: env.R2_ACCESS_KEY_ID,
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-    bucket: env.R2_BUCKET,
-    objectKey,
-  });
-  console.log(`index: presign uid=${uid} shot=${shotId} bytes=${body.bytes}`);
+  const fileId = typeof body.fileId === "string" ? body.fileId : "";
+  const shotId = isShotFileId(fileId) ? fileId : crypto.randomUUID();
+  const origin = new URL(request.url).origin;
+  const uploadUrl = `${origin}/v1/uploads/put/${encodeURIComponent(uid)}/${encodeURIComponent(shotId)}`;
+  console.log(
+    `index: presign uid=${uid} shot=${shotId} fileId=${fileId} fileIdOk=${isShotFileId(fileId)} bytes=${body.bytes} uploadUrl=${uploadUrl}`,
+  );
   return Response.json({ shotId, uploadUrl });
+}
+
+// ─── Ariadne's Thread [AT-0170] ─────────────────────
+// What: Stream the PUT body into R2 instead of buffering arrayBuffer
+// Why:  Official BUCKET.put accepts request.body; 3.8 MB arrayBuffer delayed 204 past the client timer
+// Date: 2026-08-26
+// Related: [AT-0167] backend/src/index.ts:presign, [AT-0170] CloudClient.cpp:presignAndPut
+// ─────────────────────────────────────────────────────
+async function putInbox(request: Request, env: Env): Promise<Response> {
+  const parts = new URL(request.url).pathname.split("/");
+  const uid = decodeURIComponent(parts[4] || "");
+  const shotId = decodeURIComponent(parts[5] || "");
+  if (!uid || !shotId) {
+    console.warn(`index: putInbox missing uid or shotId path=${request.url}`);
+    return jsonError("UPLOAD_FAILED", 400);
+  }
+  const declared = Number(request.headers.get("content-length") || "0");
+  console.log(`index: putInbox uid=${uid} shot=${shotId} contentLength=${declared}`);
+  if (declared > 8 * 1024 * 1024) {
+    return jsonError("CLOUD_IMAGE_REJECTED");
+  }
+  const objectKey = `inbox/${uid}/${shotId}.png`;
+  const stored = await env.BUCKET.put(objectKey, request.body, {
+    httpMetadata: { contentType: "image/png" },
+  });
+  if (!stored || stored.size < 1 || stored.size > 8 * 1024 * 1024) {
+    if (stored) {
+      await env.BUCKET.delete(objectKey);
+    }
+    console.warn(`index: putInbox rejected size=${stored?.size ?? -1} key=${objectKey}`);
+    return jsonError("CLOUD_IMAGE_REJECTED");
+  }
+  console.log(`index: putInbox stored ${objectKey} bytes=${stored.size}`);
+  return new Response(null, { status: 204 });
 }
 
 async function confirm(request: Request, env: Env): Promise<Response> {

@@ -1,12 +1,13 @@
 #pragma once
 
+#include <QColor>
 #include <QIcon>
 #include <QString>
 
-// ─── Ariadne's Thread [AT-0053] ─────────────────────
-// What: Load macOS SF Symbol as QIcon for toolbar actions
-// Why:  Native AppKit icons left of action titles
-// Date: 2026-08-25
-// Related: [AT-0012] AnnotateWindow.cpp, MacIcons.mm:macToolbarIcon
+// ─── Ariadne's Thread [AT-0149] ─────────────────────
+// What: Rasterize SF Symbol into a square QIcon without stretching
+// Why:  drawInRect to a square dest flattened glyphs on the annotate bar
+// Date: 2026-08-26
+// Related: [AT-0055] MacIcons.mm:macToolbarIcon, [AT-0063] AnnotateWindow.cpp
 // ─────────────────────────────────────────────────────
-QIcon macToolbarIcon(const QString &symbolName);
+QIcon macToolbarIcon(const QString &symbolName, const QColor &tint = QColor());

@@ -80,9 +80,16 @@ QString envOrPlist(const char *envName, const char *plistKey, const QString &fal
 
 } // namespace
 
+// ─── Ariadne's Thread [AT-0167] ─────────────────────
+// What: Default API host is the Worker workers.dev URL
+// Why:  api.seenshot.com is parked; no custom domain
+// Date: 2026-08-26
+// Related: [AT-0167] packaging/macos/Info.plist, [AT-0005] Config.cpp:envOrPlist
+// ─────────────────────────────────────────────────────
 QString Config::apiBaseUrl()
 {
-    return envOrPlist("SEENSHOT_API_BASE", "apiBaseUrl", QStringLiteral("https://api.seenshot.com"));
+    return envOrPlist("SEENSHOT_API_BASE", "apiBaseUrl",
+                      QStringLiteral("https://seenshot-api.codemarket.workers.dev"));
 }
 
 QString Config::firebaseApiKey()
@@ -112,11 +119,6 @@ QString Config::sparkleFeedUrl()
                       QStringLiteral("https://updates.seenshot.com/appcast.xml"));
 }
 
-QString Config::googleOAuthClientId()
-{
-    return envOrPlist("SEENSHOT_GOOGLE_OAUTH_CLIENT_ID", "googleOAuthClientId", QString());
-}
-
 // ─── Ariadne's Thread [AT-0086] ─────────────────────
 // What: Email-link continue URL is https:// + firebaseAuthDomain
 // Why:  User web client authDomain is the authorized Identity Toolkit domain
@@ -133,19 +135,6 @@ QString Config::emailLinkContinueUrl()
     return QStringLiteral("https://") + firebaseAuthDomain() + QLatin1Char('/');
 }
 
-// ─── Ariadne's Thread [AT-0097] ─────────────────────
-// What: Official Firebase Auth handler URL on authDomain
-// Why:  Identity Toolkit createAuthUri continueUri must be an authorized Firebase domain
-// Date: 2026-08-25
-// Related: [AT-0005] Config.h, [AT-0089] FirebaseAuthClient.cpp:createAuthUri
-// ─────────────────────────────────────────────────────
-QString Config::firebaseAuthHandlerUrl()
-{
-    const QString url = QStringLiteral("https://") + firebaseAuthDomain() + QStringLiteral("/__/auth/handler");
-    qInfo() << "Config: firebaseAuthHandlerUrl=" << url;
-    return url;
-}
-
 // ─── Ariadne's Thread [AT-0101] ─────────────────────
 // What: PostHog project key and host from env then Info.plist
 // Why:  PRD-06 — same Config path as firebaseApiKey; empty key keeps the app alive
@@ -160,4 +149,25 @@ QString Config::posthogApiKey()
 QString Config::posthogHost()
 {
     return envOrPlist("SEENSHOT_POSTHOG_HOST", "posthogHost", QStringLiteral("https://eu.i.posthog.com"));
+}
+
+// ─── Ariadne's Thread [AT-0194] ─────────────────────
+// What: Website origin and public OAuth client id for PKCE
+// Why:  Mac authorize/token URLs must match seenshot.app AS allowlist
+// Date: 2026-08-27
+// Related: [AT-0193] AuthSession.cpp:startWebsiteSignIn, packaging/macos/Info.plist
+// ─────────────────────────────────────────────────────
+QString Config::websiteBaseUrl()
+{
+    return envOrPlist("SEENSHOT_WEBSITE_BASE", "websiteBaseUrl", QStringLiteral("https://seenshot.app"));
+}
+
+QString Config::oauthClientId()
+{
+    return envOrPlist("SEENSHOT_OAUTH_CLIENT_ID", "oauthClientId", QStringLiteral("com.seenshot.app"));
+}
+
+QString Config::oauthRedirectUri()
+{
+    return envOrPlist("SEENSHOT_OAUTH_REDIRECT", "oauthRedirectUri", QStringLiteral("seenshot://oauth"));
 }

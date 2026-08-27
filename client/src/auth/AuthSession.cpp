@@ -4,27 +4,41 @@
 
 #include "app/Config.h"
 #include "auth/ISecureStore.h"
-#include "auth/MacGoogleAuth.h"
+#include "auth/MacOAuthClient.h"
 #include "local/LocalStore.h"
 
 #include <QDateTime>
 #include <QDebug>
+#include <QEventLoop>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QNetworkAccessManager>
 #include <QNetworkInformation>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QThread>
+#include <QTimer>
 #include <QUrlQuery>
 
 namespace {
 constexpr auto kRefreshKey = "refresh_token";
 constexpr auto kUidKey = "uid";
 constexpr auto kEmailKey = "email";
+constexpr auto kOauthVerifierKey = "oauth_verifier";
+constexpr auto kOauthStateKey = "oauth_state";
+constexpr auto kOauthCreatedKey = "oauth_created_ms";
+constexpr qint64 kOauthPendingTtlMs = 10 * 60 * 1000;
 } // namespace
 
 AuthSession::AuthSession(ISecureStore *store, QNetworkAccessManager *nam, QObject *parent)
     : QObject(parent)
     , m_store(store)
+    , m_nam(nam)
     , m_firebase(nam)
+    , m_oauth(new MacOAuthClient(this))
 {
+    connect(m_oauth, &MacOAuthClient::finished, this, &AuthSession::onOAuthBrowserFinished);
     loadFromStore();
     qInfo() << "AuthSession: constructed hasSession=" << hasSession() << " emailChars=" << email().size();
 }
@@ -273,40 +287,6 @@ bool AuthSession::completeEmailLink(const QUrl &url, QString *errorCode)
     return saved;
 }
 
-// ─── Ariadne's Thread [AT-0090] ─────────────────────
-// What: Google via Firebase createAuthUri handler then signInWithIdp
-// Why:  Official Identity Toolkit; /__/auth/handler is already on authorized authDomain
-// Date: 2026-08-25
-// Related: [AT-0098] MacGoogleAuth.h, [AT-0089] FirebaseAuthClient.cpp:createAuthUri
-// ─────────────────────────────────────────────────────
-bool AuthSession::signInGoogle(QString *errorCode)
-{
-    qInfo() << "AuthSession: signInGoogle";
-    if (!beginAuth(errorCode)) {
-        return false;
-    }
-    const QString continueUri = Config::firebaseAuthHandlerUrl();
-    QString authUri;
-    QString sessionId;
-    if (!m_firebase.createAuthUri(continueUri, &authUri, &sessionId, errorCode)) {
-        endAuth();
-        return false;
-    }
-    QString requestUri;
-    if (!MacGoogleAuth::captureHandlerRedirect(QUrl(authUri), &requestUri, errorCode)) {
-        endAuth();
-        return false;
-    }
-    FirebaseTokens tokens;
-    if (!m_firebase.signInWithIdpRedirect(requestUri, sessionId, &tokens, errorCode)) {
-        endAuth();
-        return false;
-    }
-    const bool saved = finishTokens(tokens, QStringLiteral("google"), errorCode);
-    endAuth();
-    return saved;
-}
-
 void AuthSession::signOut()
 {
     qInfo() << "AuthSession: signOut";
@@ -317,6 +297,9 @@ void AuthSession::signOut()
         m_store->remove(QString::fromLatin1(kRefreshKey), &error);
         m_store->remove(QString::fromLatin1(kUidKey), &error);
         m_store->remove(QString::fromLatin1(kEmailKey), &error);
+        m_store->remove(QString::fromLatin1(kOauthVerifierKey), &error);
+        m_store->remove(QString::fromLatin1(kOauthStateKey), &error);
+        m_store->remove(QString::fromLatin1(kOauthCreatedKey), &error);
         m_tokens = FirebaseTokens{};
     }
     LocalStore::clearPendingSignInEmail();
@@ -383,5 +366,263 @@ bool AuthSession::ensureIdToken(QString *idToken, QString *errorCode)
     persist(tokens, errorCode);
     *idToken = tokens.idToken;
     qInfo() << "AuthSession: ensureIdToken ok uid=" << tokens.uid;
+    return true;
+}
+
+bool AuthSession::persistPendingPkce(const QString &verifier, const QString &state, QString *errorCode)
+{
+    const QByteArray created = QByteArray::number(QDateTime::currentMSecsSinceEpoch());
+    if (!m_store->write(QString::fromLatin1(kOauthVerifierKey), verifier.toUtf8(), errorCode)) {
+        qWarning() << "AuthSession: persist oauth verifier failed";
+        return false;
+    }
+    if (!m_store->write(QString::fromLatin1(kOauthStateKey), state.toUtf8(), errorCode)) {
+        qWarning() << "AuthSession: persist oauth state failed";
+        return false;
+    }
+    if (!m_store->write(QString::fromLatin1(kOauthCreatedKey), created, errorCode)) {
+        qWarning() << "AuthSession: persist oauth created failed";
+        return false;
+    }
+    qInfo() << "AuthSession: pending PKCE stored stateChars=" << state.size();
+    return true;
+}
+
+void AuthSession::clearPendingPkce()
+{
+    QString error;
+    m_store->remove(QString::fromLatin1(kOauthVerifierKey), &error);
+    m_store->remove(QString::fromLatin1(kOauthStateKey), &error);
+    m_store->remove(QString::fromLatin1(kOauthCreatedKey), &error);
+    qInfo() << "AuthSession: pending PKCE cleared";
+}
+
+bool AuthSession::takePendingPkce(QString *verifier, QString *state, QString *errorCode)
+{
+    QString error;
+    const QByteArray rawVerifier = m_store->read(QString::fromLatin1(kOauthVerifierKey), &error);
+    const QByteArray rawState = m_store->read(QString::fromLatin1(kOauthStateKey), &error);
+    const QByteArray rawCreated = m_store->read(QString::fromLatin1(kOauthCreatedKey), &error);
+    clearPendingPkce();
+    if (rawVerifier.isEmpty() || rawState.isEmpty()) {
+        qInfo() << "AuthSession: takePendingPkce empty";
+        if (errorCode) {
+            *errorCode = QString();
+        }
+        return false;
+    }
+    const qint64 created = rawCreated.toLongLong();
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - created;
+    if (created <= 0 || age > kOauthPendingTtlMs) {
+        qWarning() << "AuthSession: pending PKCE expired ageMs=" << age;
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
+        }
+        return false;
+    }
+    *verifier = QString::fromUtf8(rawVerifier);
+    *state = QString::fromUtf8(rawState);
+    qInfo() << "AuthSession: takePendingPkce ok ageMs=" << age << " stateChars=" << state->size();
+    return true;
+}
+
+bool AuthSession::exchangeAuthorizationCode(const QString &code, const QString &verifier, QString *customToken,
+                                            QString *errorCode)
+{
+    const QUrl tokenUrl(Config::websiteBaseUrl() + QStringLiteral("/oauth/token"));
+    qInfo() << "AuthSession: POST oauth token host=" << tokenUrl.host();
+    QUrlQuery form;
+    form.addQueryItem(QStringLiteral("grant_type"), QStringLiteral("authorization_code"));
+    form.addQueryItem(QStringLiteral("code"), code);
+    form.addQueryItem(QStringLiteral("redirect_uri"), Config::oauthRedirectUri());
+    form.addQueryItem(QStringLiteral("client_id"), Config::oauthClientId());
+    form.addQueryItem(QStringLiteral("code_verifier"), verifier);
+    QNetworkRequest request(tokenUrl);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/x-www-form-urlencoded"));
+    QNetworkReply *reply = m_nam->post(request, form.query(QUrl::FullyEncoded).toUtf8());
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    timer.start(20000);
+    loop.exec();
+    if (!reply->isFinished()) {
+        qWarning() << "AuthSession: oauth token timeout";
+        reply->abort();
+        reply->deleteLater();
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
+        }
+        return false;
+    }
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray body = reply->readAll();
+    reply->deleteLater();
+    qInfo() << "AuthSession: oauth token status=" << status << " bytes=" << body.size();
+    const QJsonObject json = QJsonDocument::fromJson(body).object();
+    if (status < 200 || status >= 300) {
+        const QString oauthErr = json.value(QStringLiteral("error")).toString();
+        qWarning() << "AuthSession: oauth token error=" << oauthErr;
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
+        }
+        return false;
+    }
+    const QString token = json.value(QStringLiteral("custom_token")).toString();
+    if (token.isEmpty()) {
+        qWarning() << "AuthSession: oauth token missing custom_token";
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
+        }
+        return false;
+    }
+    *customToken = token;
+    return true;
+}
+
+// ─── Ariadne's Thread [AT-0193] ─────────────────────
+// What: Start seenshot.app Authorization Code + PKCE and finish AuthSession
+// Why:  Mac public client; Firebase session persists until Sign Out
+// Date: 2026-08-27
+// Related: [AT-0191] MacOAuthClient.mm, [AT-0192] FirebaseAuthClient.cpp:signInWithCustomToken
+// ─────────────────────────────────────────────────────
+bool AuthSession::startWebsiteSignIn(QString *errorCode)
+{
+    qInfo() << "AuthSession: startWebsiteSignIn hasSession=" << hasSession();
+    if (hasSession()) {
+        qInfo() << "AuthSession: startWebsiteSignIn skipped, already signed in";
+        return true;
+    }
+    if (!beginAuth(errorCode)) {
+        return false;
+    }
+    QString verifier;
+    QString challenge;
+    QString state;
+    if (!MacOAuthClient::generatePkce(&verifier, &challenge, &state, errorCode)) {
+        endAuth();
+        return false;
+    }
+    if (!persistPendingPkce(verifier, state, errorCode)) {
+        endAuth();
+        return false;
+    }
+    QUrl url(Config::websiteBaseUrl() + QStringLiteral("/oauth/authorize"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
+    query.addQueryItem(QStringLiteral("client_id"), Config::oauthClientId());
+    query.addQueryItem(QStringLiteral("redirect_uri"), Config::oauthRedirectUri());
+    query.addQueryItem(QStringLiteral("code_challenge"), challenge);
+    query.addQueryItem(QStringLiteral("code_challenge_method"), QStringLiteral("S256"));
+    query.addQueryItem(QStringLiteral("state"), state);
+    url.setQuery(query);
+    if (!m_oauth->start(url)) {
+        qWarning() << "AuthSession: ASWebAuthenticationSession failed to start";
+        clearPendingPkce();
+        endAuth();
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
+        }
+        return false;
+    }
+    qInfo() << "AuthSession: website sign-in browser started";
+    return true;
+}
+
+void AuthSession::onOAuthBrowserFinished(const QUrl &callbackUrl, const QString &errorCode)
+{
+    qInfo() << "AuthSession: onOAuthBrowserFinished error=" << errorCode
+            << " hasCallback=" << !callbackUrl.isEmpty();
+    if (!errorCode.isEmpty() && callbackUrl.isEmpty()) {
+        clearPendingPkce();
+        endAuth();
+        emit websiteSignInSettled(errorCode);
+        return;
+    }
+    QString localError;
+    if (!completeWebsiteCallback(callbackUrl, &localError)) {
+        qWarning() << "AuthSession: website callback failed code=" << localError;
+    }
+}
+
+bool AuthSession::completeWebsiteCallback(const QUrl &url, QString *errorCode)
+{
+    qInfo() << "AuthSession: completeWebsiteCallback scheme=" << url.scheme() << " host=" << url.host();
+    const QUrlQuery query(url);
+    const QString oauthError = query.queryItemValue(QStringLiteral("error"));
+    if (oauthError == QLatin1String("access_denied")) {
+        qInfo() << "AuthSession: oauth access_denied";
+        clearPendingPkce();
+        endAuth();
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_DENIED");
+        }
+        emit websiteSignInSettled(QStringLiteral("AUTH_OAUTH_DENIED"));
+        return false;
+    }
+    QString verifier;
+    QString state;
+    QString takeError;
+    if (!takePendingPkce(&verifier, &state, &takeError)) {
+        if (takeError.isEmpty()) {
+            qInfo() << "AuthSession: oauth callback ignored, no pending PKCE";
+            if (errorCode) {
+                *errorCode = QString();
+            }
+            return true;
+        }
+        qWarning() << "AuthSession: pending PKCE unusable code=" << takeError;
+        endAuth();
+        if (errorCode) {
+            *errorCode = takeError;
+        }
+        emit websiteSignInSettled(takeError);
+        return false;
+    }
+    const QString returnedState = query.queryItemValue(QStringLiteral("state"));
+    if (returnedState != state) {
+        qWarning() << "AuthSession: oauth state mismatch returnedChars=" << returnedState.size()
+                   << " expectedChars=" << state.size();
+        endAuth();
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_STATE");
+        }
+        emit websiteSignInSettled(QStringLiteral("AUTH_OAUTH_STATE"));
+        return false;
+    }
+    const QString code = query.queryItemValue(QStringLiteral("code"));
+    if (code.isEmpty()) {
+        qWarning() << "AuthSession: oauth callback missing code";
+        endAuth();
+        if (errorCode) {
+            *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
+        }
+        emit websiteSignInSettled(QStringLiteral("AUTH_OAUTH_FAILED"));
+        return false;
+    }
+    QString customToken;
+    if (!exchangeAuthorizationCode(code, verifier, &customToken, errorCode)) {
+        endAuth();
+        const QString settled = errorCode && !errorCode->isEmpty() ? *errorCode : QStringLiteral("AUTH_OAUTH_FAILED");
+        emit websiteSignInSettled(settled);
+        return false;
+    }
+    FirebaseTokens tokens;
+    if (!m_firebase.signInWithCustomToken(customToken, &tokens, errorCode)) {
+        endAuth();
+        const QString settled = errorCode && !errorCode->isEmpty() ? *errorCode : QStringLiteral("AUTH_OAUTH_FAILED");
+        emit websiteSignInSettled(settled);
+        return false;
+    }
+    const bool saved = finishTokens(tokens, QStringLiteral("oauth"), errorCode);
+    endAuth();
+    if (!saved) {
+        const QString settled = errorCode && !errorCode->isEmpty() ? *errorCode : QStringLiteral("AUTH_OAUTH_FAILED");
+        emit websiteSignInSettled(settled);
+        return false;
+    }
+    qInfo() << "AuthSession: website sign-in finished uid=" << tokens.uid;
+    emit websiteSignInSettled(QString());
     return true;
 }

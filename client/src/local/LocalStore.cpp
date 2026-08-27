@@ -67,6 +67,31 @@ void LocalStore::setFirstRunCompleted()
     qInfo() << "LocalStore: first run marked complete";
 }
 
+// ─── Ariadne's Thread [AT-0175] ─────────────────────
+// What: Persist that this Mac already registered SeenShot with Screen Recording TCC
+// Why:  CGRequestScreenCaptureAccess every launch showed Open Settings while another signed copy was already on
+// Date: 2026-08-26
+// Related: [AT-0176] Application.cpp:ensureScreenRecording, [AT-0178] MacPermissions.mm:probeScreenRecording
+// ─────────────────────────────────────────────────────
+bool LocalStore::screenRecordingRegistered()
+{
+    QSettings settings;
+    const bool ok = settings.value(QStringLiteral("screenRecordingRegistered"), false).toBool();
+    qInfo() << "LocalStore: screenRecordingRegistered=" << ok;
+    return ok;
+}
+
+void LocalStore::setScreenRecordingRegistered()
+{
+    QSettings settings;
+    if (settings.value(QStringLiteral("screenRecordingRegistered"), false).toBool()) {
+        qInfo() << "LocalStore: screenRecordingRegistered already true";
+        return;
+    }
+    settings.setValue(QStringLiteral("screenRecordingRegistered"), true);
+    qInfo() << "LocalStore: screenRecordingRegistered set";
+}
+
 QString LocalStore::hotkeySpec()
 {
     QSettings settings;

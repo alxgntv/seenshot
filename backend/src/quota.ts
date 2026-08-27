@@ -6,6 +6,7 @@ export interface Env {
   QUOTA: DurableObjectNamespace;
   FIREBASE_PROJECT_ID: string;
   PUBLIC_BASE_URL: string;
+  R2_PUBLIC_BASE_URL: string;
   R2_ACCOUNT_ID: string;
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
@@ -17,6 +18,24 @@ export interface Env {
 }
 
 const QUOTA_BYTES = 10 * 1024 * 1024;
+
+// ─── Ariadne's Thread [AT-0185] ─────────────────────
+// What: Public URL is /screenshot/{fileId} from the local PNG name
+// Why:  SeenShot-date-12hex.png and the share link must use the same id
+// Date: 2026-08-27
+// Related: [AT-0184] AnnotateWindow.cpp:makeShotFileId, seenshot-web→src/index.ts:serveShare
+// ─────────────────────────────────────────────────────
+function publicShareUrl(base: string, publicId: string): string {
+  const url = `${base}/screenshot/${publicId}`;
+  console.log(`QuotaShard: publicShareUrl ${url}`);
+  return url;
+}
+
+export function isShotFileId(value: string): boolean {
+  const ok = /^[0-9a-f]{12}$/.test(value);
+  console.log(`QuotaShard: isShotFileId value=${value} ok=${ok}`);
+  return ok;
+}
 
 function shardName(uid: string): string {
   let hash = 0;
@@ -152,7 +171,7 @@ export class QuotaShard {
       console.log(`QuotaShard: confirm idempotent shot=${shotId}`);
       const publicUrl =
         existing.visibility === "public" && existing.public_id
-          ? `${this.env.PUBLIC_BASE_URL}/s/${existing.public_id}`
+          ? publicShareUrl(this.env.PUBLIC_BASE_URL, existing.public_id)
           : "";
       const used = await this.env.DB.prepare("SELECT used_bytes FROM users WHERE uid = ?")
         .bind(uid)
@@ -192,12 +211,22 @@ export class QuotaShard {
     }
     const user = await this.ensureUser(uid);
     const evicted = await this.evictUntilFits(uid, user.used_bytes, bytes.byteLength);
-    const publicId = crypto.randomUUID().replace(/-/g, "");
+    const publicId = shotId;
     const now = Date.now();
     let stored: Uint8Array = new Uint8Array(bytes);
     let visibility = "private";
     let watermarked = 0;
     if (publish) {
+      const clash = await this.env.DB.prepare("SELECT shot_id FROM shots WHERE public_id = ?")
+        .bind(publicId)
+        .first<{ shot_id: string }>();
+      if (clash && clash.shot_id !== shotId) {
+        console.warn(`QuotaShard: public_id clash publicId=${publicId} existing=${clash.shot_id}`);
+        return Response.json(
+          { code: "UNKNOWN_ERROR", message: "Something went wrong. Try again." },
+          { status: 500 },
+        );
+      }
       visibility = "public";
       if (!this.isPro(user)) {
         stored = new Uint8Array(applyWatermark(bytes));
@@ -225,8 +254,8 @@ export class QuotaShard {
       .first<{ used: number }>();
     const usedBytes = usedRow?.used ?? stored.byteLength;
     await this.env.DB.prepare("UPDATE users SET used_bytes = ? WHERE uid = ?").bind(usedBytes, uid).run();
-    const publicUrl = publish ? `${this.env.PUBLIC_BASE_URL}/s/${publicId}` : "";
-    console.log(`QuotaShard: confirm ok shot=${shotId} publish=${publish} used=${usedBytes} evicted=${evicted.length}`);
+    const publicUrl = publish ? publicShareUrl(this.env.PUBLIC_BASE_URL, publicId) : "";
+    console.log(`QuotaShard: confirm ok shot=${shotId} publish=${publish} publicId=${publicId} used=${usedBytes} evicted=${evicted.length}`);
     return Response.json({ shotId, publicUrl, usedBytes, evictedIds: evicted });
   }
 
@@ -245,7 +274,7 @@ export class QuotaShard {
     if (row.visibility === "public" && row.public_id) {
       return Response.json({
         shotId,
-        publicUrl: `${this.env.PUBLIC_BASE_URL}/s/${row.public_id}`,
+        publicUrl: publicShareUrl(this.env.PUBLIC_BASE_URL, row.public_id),
         usedBytes: row.bytes,
         evictedIds: [],
       });
@@ -266,7 +295,17 @@ export class QuotaShard {
       stored = new Uint8Array(applyWatermark(bytes));
       watermarked = 1;
     }
-    const publicId = crypto.randomUUID().replace(/-/g, "");
+    const publicId = shotId;
+    const clash = await this.env.DB.prepare("SELECT shot_id FROM shots WHERE public_id = ?")
+      .bind(publicId)
+      .first<{ shot_id: string }>();
+    if (clash && clash.shot_id !== shotId) {
+      console.warn(`QuotaShard: publish clash publicId=${publicId} existing=${clash.shot_id}`);
+      return Response.json(
+        { code: "UNKNOWN_ERROR", message: "Something went wrong. Try again." },
+        { status: 500 },
+      );
+    }
     await this.env.BUCKET.put(`public/${publicId}.png`, stored, {
       httpMetadata: {
         contentType: "image/png",
@@ -288,7 +327,7 @@ export class QuotaShard {
     console.log(`QuotaShard: published existing shot=${shotId} public=${publicId}`);
     return Response.json({
       shotId,
-      publicUrl: `${this.env.PUBLIC_BASE_URL}/s/${publicId}`,
+      publicUrl: publicShareUrl(this.env.PUBLIC_BASE_URL, publicId),
       usedBytes: usedRow?.used ?? stored.byteLength,
       evictedIds: [],
     });

@@ -6,13 +6,7 @@
 
 #import <AppKit/AppKit.h>
 
-// ─── Ariadne's Thread [AT-0055] ─────────────────────
-// What: Rasterize SF Symbol via NSBitmapImageRep PNG, tint with labelColor
-// Why:  NSImage TIFFRepresentation of system symbols is not a Qt-readable TIFF; icons stayed null
-// Date: 2026-08-25
-// Related: [AT-0053] MacIcons.h:macToolbarIcon, [AT-0012] AnnotateWindow.cpp
-// ─────────────────────────────────────────────────────
-QIcon macToolbarIcon(const QString &symbolName)
+QIcon macToolbarIcon(const QString &symbolName, const QColor &tint)
 {
     if (symbolName.isEmpty()) {
         qWarning() << "macToolbarIcon: empty SF Symbol name";
@@ -25,7 +19,7 @@ QIcon macToolbarIcon(const QString &symbolName)
         return QIcon();
     }
     NSImageSymbolConfiguration *config =
-        [NSImageSymbolConfiguration configurationWithPointSize:14.0
+        [NSImageSymbolConfiguration configurationWithPointSize:18.0
                                                         weight:NSFontWeightRegular
                                                          scale:NSImageSymbolScaleMedium];
     NSImage *configured = [symbol imageWithSymbolConfiguration:config];
@@ -36,8 +30,9 @@ QIcon macToolbarIcon(const QString &symbolName)
     }
 
     const CGFloat scale = [NSScreen mainScreen] ? [NSScreen mainScreen].backingScaleFactor : 1.0;
-    const NSInteger px = (NSInteger)llround(16.0 * (scale > 0 ? scale : 1.0));
-    qInfo() << "macToolbarIcon: rasterize" << symbolName << "px=" << (int)px << "scale=" << scale;
+    const NSInteger px = (NSInteger)llround(22.0 * (scale > 0 ? scale : 1.0));
+    qInfo() << "macToolbarIcon: rasterize" << symbolName << "px=" << (int)px << "scale=" << scale
+            << "tintValid=" << tint.isValid();
 
     NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:nil
@@ -63,18 +58,32 @@ QIcon macToolbarIcon(const QString &symbolName)
         return QIcon();
     }
     [NSGraphicsContext setCurrentContext:gc];
-    const NSRect dest = NSMakeRect(0, 0, px, px);
+    const NSRect canvas = NSMakeRect(0, 0, px, px);
     [[NSColor clearColor] set];
-    NSRectFill(dest);
+    NSRectFill(canvas);
     [symbol setTemplate:YES];
+    NSSize nat = symbol.size;
+    if (nat.width < 1.0 || nat.height < 1.0) {
+        nat = NSMakeSize(px, px);
+    }
+    const CGFloat fit = MIN(canvas.size.width / nat.width, canvas.size.height / nat.height);
+    const NSSize draw = NSMakeSize(nat.width * fit, nat.height * fit);
+    const NSRect dest = NSMakeRect((canvas.size.width - draw.width) * 0.5,
+                                   (canvas.size.height - draw.height) * 0.5, draw.width, draw.height);
     [symbol drawInRect:dest
               fromRect:NSZeroRect
              operation:NSCompositingOperationSourceOver
               fraction:1.0
         respectFlipped:YES
                  hints:nil];
-    [[NSColor labelColor] set];
-    NSRectFillUsingOperation(dest, NSCompositingOperationSourceIn);
+    NSColor *fill = nil;
+    if (tint.isValid()) {
+        fill = [NSColor colorWithSRGBRed:tint.redF() green:tint.greenF() blue:tint.blueF() alpha:tint.alphaF()];
+    } else {
+        fill = [NSColor labelColor];
+    }
+    [fill set];
+    NSRectFillUsingOperation(canvas, NSCompositingOperationSourceIn);
     [NSGraphicsContext restoreGraphicsState];
 
     NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
@@ -89,6 +98,6 @@ QIcon macToolbarIcon(const QString &symbolName)
     }
     pix.setDevicePixelRatio(scale > 0 ? scale : 1.0);
     qInfo() << "macToolbarIcon: loaded" << symbolName << "size=" << pix.size()
-            << "dpr=" << pix.devicePixelRatio() << "null=" << pix.isNull();
+            << "dpr=" << pix.devicePixelRatio() << "dest=" << dest.size.width << "x" << dest.size.height;
     return QIcon(pix);
 }

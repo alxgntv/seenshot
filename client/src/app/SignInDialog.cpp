@@ -19,17 +19,11 @@ SignInDialog::SignInDialog(AuthSession *auth, QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(20, 18, 20, 18);
     layout->setSpacing(12);
-    auto *lead = new QLabel(QStringLiteral("Sign in to share links."), this);
+    auto *lead = new QLabel(QStringLiteral("Sign in with seenshot.app to save screenshots to the cloud."), this);
     lead->setWordWrap(true);
     layout->addWidget(lead);
     m_panel = new AccountSignInPanel(auth, this);
     layout->addWidget(m_panel);
-    // ─── Ariadne's Thread [AT-0123] ─────────────────────
-    // What: Show the running app version on the Share sign-in modal
-    // Why:  Same build string as Settings
-    // Date: 2026-08-26
-    // Related: [AT-0122] SettingsWindow.cpp, client/src/main.cpp
-    // ─────────────────────────────────────────────────────
     const QString version = QApplication::applicationVersion();
     auto *versionLabel = new QLabel(QStringLiteral("Version %1").arg(version), this);
     versionLabel->setAlignment(Qt::AlignCenter);
@@ -44,10 +38,10 @@ SignInDialog::SignInDialog(AuthSession *auth, QWidget *parent)
     qInfo() << "SignInDialog: constructed";
 }
 
-bool SignInDialog::execShareSignIn(AuthSession *auth, QWidget *parent)
+bool SignInDialog::execSignIn(AuthSession *auth, QWidget *parent)
 {
     if (!auth) {
-        qWarning() << "SignInDialog: execShareSignIn null auth";
+        qWarning() << "SignInDialog: execSignIn null auth";
         return false;
     }
     if (auth->hasSession()) {

@@ -26,3 +26,23 @@ CREATE TABLE IF NOT EXISTS takedowns (
   reason TEXT,
   created_at INTEGER NOT NULL
 );
+
+-- ─── Ariadne's Thread [AT-0190] ─────────────────────
+-- What: One-time PKCE authorization codes for the Mac app
+-- Why:  seenshot.app is the OAuth AS; codes must not live in Worker RAM
+-- Date: 2026-08-27
+-- Related: [AT-0037] seenshot-web→src/oauth.ts, [AT-0193] app→AuthSession.cpp
+-- ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+  code TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS oauth_codes_expires ON oauth_authorization_codes (expires_at);

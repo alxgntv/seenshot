@@ -16,9 +16,10 @@ public:
     static QString firebaseAuthDomain();
     static QString firebaseAppId();
     static QString sparkleFeedUrl();
-    static QString googleOAuthClientId();
     static QString emailLinkContinueUrl();
-    static QString firebaseAuthHandlerUrl();
     static QString posthogApiKey();
     static QString posthogHost();
+    static QString websiteBaseUrl();
+    static QString oauthClientId();
+    static QString oauthRedirectUri();
 };

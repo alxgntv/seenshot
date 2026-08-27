@@ -1,4 +1,10 @@
-import { PNG } from "pngjs";
+// ─── Ariadne's Thread [AT-0168] ─────────────────────
+// What: Decode/encode watermark PNG via pngjs/browser.js
+// Why:  pngjs Node zlib.Inflate.call throws on Workers: Inflate cannot be invoked without new
+// Date: 2026-08-26
+// Related: [AT-0031] backend/src/watermark.ts:applyWatermark, [AT-0032] backend/src/quota.ts:confirm
+// ─────────────────────────────────────────────────────
+import { PNG } from "pngjs/browser.js";
 
 const MAX_MP = 8_000_000;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -36,7 +42,9 @@ function drawGlyph(png: PNG, x: number, y: number, color: [number, number, numbe
 // ─────────────────────────────────────────────────────
 export function applyWatermark(bytes: ArrayBuffer): Uint8Array {
   readPngSize(bytes);
+  console.log(`watermark: sync read via pngjs/browser.js bytes=${bytes.byteLength}`);
   const png = PNG.sync.read(Buffer.from(bytes));
+  console.log(`watermark: decoded ${png.width}x${png.height}`);
   const label = "SeenShot";
   const scale = Math.max(2, Math.floor(png.width / 400));
   const startX = Math.max(8, png.width - label.length * 8 * scale - 16);

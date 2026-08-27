@@ -28,9 +28,7 @@ public:
     bool sendPasswordReset(const QString &email, QString *errorCode);
     bool sendEmailLink(const QString &email, QString *errorCode);
     bool signInEmailLink(const QString &email, const QString &oobCode, FirebaseTokens *out, QString *errorCode);
-    bool createAuthUri(const QString &continueUri, QString *authUri, QString *sessionId, QString *errorCode);
-    bool signInWithIdpRedirect(const QString &requestUri, const QString &sessionId, FirebaseTokens *out,
-                               QString *errorCode);
+    bool signInWithCustomToken(const QString &customToken, FirebaseTokens *out, QString *errorCode);
     bool lookupEmail(const QString &idToken, QString *email, QString *errorCode);
     bool refresh(const QString &refreshToken, FirebaseTokens *out, QString *errorCode);
 

@@ -5,7 +5,7 @@
 
 // ─── Ariadne's Thread [AT-0014] ─────────────────────
 // What: Secure store interface for later Linux/Windows ports
-// Why:  Stage 1 uses Keychain only
+// Why:  Session file is QSettings; no macOS Keychain prompts
 // Date: 2026-08-25
 // Related: client/src/auth/KeychainStore.h
 // ─────────────────────────────────────────────────────

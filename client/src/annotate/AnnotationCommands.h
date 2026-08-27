@@ -75,6 +75,33 @@ private:
     int m_gestureId = 0;
 };
 
+class ChangeTextSizeCommand : public QUndoCommand {
+public:
+    ChangeTextSizeCommand(QGraphicsItem *item, int size, int gestureId, QUndoCommand *parent = nullptr);
+    void undo() override;
+    void redo() override;
+    int id() const override;
+    bool mergeWith(const QUndoCommand *other) override;
+
+private:
+    QGraphicsItem *m_item = nullptr;
+    int m_old = 18;
+    int m_new = 18;
+    int m_gestureId = 0;
+};
+
+class ChangeTextOutlineCommand : public QUndoCommand {
+public:
+    ChangeTextOutlineCommand(QGraphicsItem *item, bool on, QUndoCommand *parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    QGraphicsItem *m_item = nullptr;
+    bool m_old = false;
+    bool m_new = false;
+};
+
 class ChangeFillAlphaCommand : public QUndoCommand {
 public:
     ChangeFillAlphaCommand(QGraphicsItem *item, int alpha, int gestureId, QUndoCommand *parent = nullptr);
@@ -136,8 +163,8 @@ private:
 
 class ChangePhotoScaleCommand : public QUndoCommand {
 public:
-    ChangePhotoScaleCommand(QGraphicsItem *item, qreal oldScale, qreal newScale, int gestureId,
-                            QUndoCommand *parent = nullptr);
+    ChangePhotoScaleCommand(QGraphicsItem *item, qreal oldScale, qreal newScale, const QPointF &oldPos,
+                            const QPointF &newPos, int gestureId, QUndoCommand *parent = nullptr);
     void undo() override;
     void redo() override;
     int id() const override;
@@ -147,6 +174,8 @@ private:
     QGraphicsItem *m_item = nullptr;
     qreal m_old = 1;
     qreal m_new = 1;
+    QPointF m_oldPos;
+    QPointF m_newPos;
     int m_gestureId = 0;
 };
 

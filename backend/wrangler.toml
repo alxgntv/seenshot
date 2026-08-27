@@ -3,13 +3,18 @@ main = "src/index.ts"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Cache Rules (dashboard, not wrangler):
-# /p/* and /s/* -> Cache Everything, Ignore query string
+# ─── Ariadne's Thread [AT-0167] ─────────────────────
+# What: Share URLs use seenshot.app; R2 stays on r2.dev
+# Why:  Mac publish links must open the website share page
+# Date: 2026-08-26
+# Related: [AT-0033] backend/src/index.ts, seenshot-web/src/index.ts:serveShare
+# ─────────────────────────────────────────────────────
+workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
 database_name = "seenshot"
-database_id = "REPLACE_D1_ID"
+database_id = "8c102f6f-47bf-40b1-97d1-17ae9aec6e6e"
 
 [[r2_buckets]]
 binding = "BUCKET"
@@ -25,17 +30,24 @@ new_sqlite_classes = ["QuotaShard"]
 [triggers]
 crons = ["*/5 * * * *", "0 * * * *"]
 
+# ─── Ariadne's Thread [AT-0186] ─────────────────────
+# What: Import disposable_email_blocklist.conf as a text module
+# Why:  Official list is a .conf file; Wrangler only inlines .txt/.html/.sql by default
+# Date: 2026-08-27
+# Related: [AT-0186] backend/src/disposableEmail.ts
+# ─────────────────────────────────────────────────────
+[[rules]]
+type = "Text"
+globs = ["**/*.conf"]
+fallthrough = true
+
 [vars]
-FIREBASE_PROJECT_ID = "REPLACE_FIREBASE_PROJECT"
-PUBLIC_BASE_URL = "https://shot.seenshot.com"
-# PUBLIC_BASE_URL is the R2 custom domain for /p/*.png (no Worker).
-# API Worker hostname must stay separate (api.seenshot.com).
-# Dashboard Cache Rules on that R2 domain: Cache Everything + Ignore query string for /p/* and /s/*.
-R2_ACCOUNT_ID = "REPLACE_ACCOUNT"
+FIREBASE_PROJECT_ID = "seenshot-app"
+PUBLIC_BASE_URL = "https://seenshot.app"
+R2_PUBLIC_BASE_URL = "https://pub-453d6a740dac45a2b8df5cb9e77df3b2.r2.dev"
+R2_ACCOUNT_ID = "2a3ba77f5940f33d1c239fdff0a34f3c"
 R2_ACCESS_KEY_ID = "REPLACE_ACCESS_KEY"
 R2_SECRET_ACCESS_KEY = "REPLACE_SECRET"
 R2_BUCKET = "seenshot"
 STRIPE_PRICE_ID = "REPLACE_PRICE"
 ABUSE_EMAIL = "abuse@seenshot.com"
-
-# Secrets via wrangler secret: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, FIREBASE_PROJECT_ID if needed

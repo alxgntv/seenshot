@@ -4,7 +4,12 @@
 #include <QDebug>
 #include <QVariant>
 #include <QFont>
+#include <QFontMetrics>
 #include <QLineF>
+#include <QTextCharFormat>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextOption>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
@@ -155,18 +160,35 @@ void applyHighlightAppearance(QGraphicsRectItem *rect, const QColor &color, High
 
 namespace {
 
-constexpr qreal kStepBadgeRadius = 14.0;
+qreal stepBadgeRadiusFor(const QGraphicsRectItem *rect)
+{
+    if (!rect) {
+        return 14.0;
+    }
+    for (QGraphicsItem *child : rect->childItems()) {
+        if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+            return badge->badgeRadius();
+        }
+    }
+    return 14.0;
+}
 
 bool stepBadgeFitsShot(const QGraphicsRectItem *rect, const QPointF &localCenter, const QRectF &shot)
 {
     if (!rect) {
+        qWarning() << "stepBadgeFitsShot: null rect";
         return false;
     }
-    const QRectF local(localCenter.x() - kStepBadgeRadius, localCenter.y() - kStepBadgeRadius,
-                       kStepBadgeRadius * 2.0, kStepBadgeRadius * 2.0);
+    if (shot.isEmpty()) {
+        qWarning() << "stepBadgeFitsShot: empty shot, fit=false local=" << localCenter;
+        return false;
+    }
+    const qreal radius = stepBadgeRadiusFor(rect);
+    const QRectF local(localCenter.x() - radius, localCenter.y() - radius, radius * 2.0, radius * 2.0);
     const QRectF sceneBadge = rect->mapRectToScene(local);
     const bool ok = shot.contains(sceneBadge);
-    qInfo() << "stepBadgeFitsShot: local=" << localCenter << "scene=" << sceneBadge << "fit=" << ok;
+    qInfo() << "stepBadgeFitsShot: local=" << localCenter << "scene=" << sceneBadge << "shot=" << shot
+            << "fit=" << ok;
     return ok;
 }
 
@@ -176,8 +198,12 @@ QPointF clampStepBadgeLocal(const QGraphicsRectItem *rect, QPointF localCenter, 
         qWarning() << "clampStepBadgeLocal: null rect";
         return localCenter;
     }
-    const QRectF local(localCenter.x() - kStepBadgeRadius, localCenter.y() - kStepBadgeRadius,
-                       kStepBadgeRadius * 2.0, kStepBadgeRadius * 2.0);
+    if (shot.isEmpty()) {
+        qWarning() << "clampStepBadgeLocal: empty shot, keep local=" << localCenter;
+        return localCenter;
+    }
+    const qreal radius = stepBadgeRadiusFor(rect);
+    const QRectF local(localCenter.x() - radius, localCenter.y() - radius, radius * 2.0, radius * 2.0);
     const QRectF sceneBadge = rect->mapRectToScene(local);
     qreal dx = 0;
     qreal dy = 0;
@@ -194,21 +220,22 @@ QPointF clampStepBadgeLocal(const QGraphicsRectItem *rect, QPointF localCenter, 
         dy = shot.bottom() - sceneBadge.bottom();
     }
     const QPointF clamped = localCenter + QPointF(dx, dy);
-    qInfo() << "clampStepBadgeLocal: from=" << localCenter << "to=" << clamped << "dx=" << dx << "dy=" << dy;
+    qInfo() << "clampStepBadgeLocal: from=" << localCenter << "to=" << clamped << "dx=" << dx << "dy=" << dy
+            << "shot=" << shot << "sceneBadge=" << sceneBadge;
     return clamped;
 }
 
-QPointF outsideStepBadgeCenter(const QRectF &box, int corner)
+QPointF outsideStepBadgeCenter(const QRectF &box, int corner, qreal radius)
 {
     switch (corner) {
     case 0:
-        return box.topLeft() + QPointF(-kStepBadgeRadius, -kStepBadgeRadius);
+        return box.topLeft() + QPointF(-radius, -radius);
     case 1:
-        return QPointF(box.right(), box.top()) + QPointF(kStepBadgeRadius, -kStepBadgeRadius);
+        return QPointF(box.right(), box.top()) + QPointF(radius, -radius);
     case 2:
-        return QPointF(box.left(), box.bottom()) + QPointF(-kStepBadgeRadius, kStepBadgeRadius);
+        return QPointF(box.left(), box.bottom()) + QPointF(-radius, radius);
     default:
-        return box.bottomRight() + QPointF(kStepBadgeRadius, kStepBadgeRadius);
+        return box.bottomRight() + QPointF(radius, radius);
     }
 }
 
@@ -272,7 +299,13 @@ void placeHighlightStepBadge(QGraphicsRectItem *rect, const QRectF &shot, const 
         qWarning() << "placeHighlightStepBadge: no badge";
         return;
     }
+    if (shot.isEmpty()) {
+        qWarning() << "placeHighlightStepBadge: empty shot, skip clamp-to-origin box=" << rect->rect();
+    }
+    qInfo() << "placeHighlightStepBadge: shot=" << shot << "radius=" << stepBadgeRadiusFor(rect)
+            << "cursor=" << cursorScene << "onScene=" << (rect->scene() != nullptr);
     const QRectF box = rect->rect();
+    const qreal radius = stepBadgeRadiusFor(rect);
     int order[4] = {0, 1, 2, 3};
     qreal dist[4];
     for (int i = 0; i < 4; ++i) {
@@ -282,10 +315,10 @@ void placeHighlightStepBadge(QGraphicsRectItem *rect, const QRectF &shot, const 
     std::sort(order, order + 4, [&](int a, int b) {
         return dist[a] < dist[b];
     });
-    QPointF chosen = outsideStepBadgeCenter(box, order[0]);
+    QPointF chosen = outsideStepBadgeCenter(box, order[0], radius);
     bool fitted = false;
     for (int i = 0; i < 4; ++i) {
-        const QPointF candidate = outsideStepBadgeCenter(box, order[i]);
+        const QPointF candidate = outsideStepBadgeCenter(box, order[i], radius);
         if (stepBadgeFitsShot(rect, candidate, shot)) {
             chosen = candidate;
             fitted = true;
@@ -309,11 +342,12 @@ void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int 
         return;
     }
     const QRectF box = rect->rect();
+    const qreal radius = stepBadgeRadiusFor(rect);
     const QPointF candidates[] = {
-        box.topLeft() + QPointF(-kStepBadgeRadius, -kStepBadgeRadius),
-        QPointF(box.right(), box.top()) + QPointF(kStepBadgeRadius, -kStepBadgeRadius),
-        QPointF(box.left(), box.bottom()) + QPointF(-kStepBadgeRadius, kStepBadgeRadius),
-        box.bottomRight() + QPointF(kStepBadgeRadius, kStepBadgeRadius),
+        box.topLeft() + QPointF(-radius, -radius),
+        QPointF(box.right(), box.top()) + QPointF(radius, -radius),
+        QPointF(box.left(), box.bottom()) + QPointF(-radius, radius),
+        box.bottomRight() + QPointF(radius, radius),
     };
     QPointF chosen = candidates[0];
     bool fitted = false;
@@ -548,13 +582,29 @@ void setArrowEndpoints(QGraphicsPathItem *item, const QPointF &from, const QPoin
     qInfo() << "setArrowEndpoints: from=" << from << "to=" << to;
 }
 
+// ─── Ariadne's Thread [AT-0161] ─────────────────────
+// What: QTextDocument wrap is WrapAtWordBoundaryOrAnywhere on every text block
+// Why:  Default WordWrap will not shrink width below the longest unbreakable token
+// Date: 2026-08-26
+// Related: [AT-0156] AnnotateWindow.cpp:applySelectResize, [AT-0040] AnnotateItems.h:AnnotateTextItem
+// ─────────────────────────────────────────────────────
 AnnotateTextItem::AnnotateTextItem(const QString &text)
     : QGraphicsTextItem(text)
 {
     setAnnotateKind(this, AnnotateKind::Text);
     setTextInteractionFlags(Qt::NoTextInteraction);
+    QTextDocument *doc = document();
+    if (!doc) {
+        qWarning() << "AnnotateTextItem: created without document";
+    } else {
+        QTextOption opt = doc->defaultTextOption();
+        opt.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        doc->setDefaultTextOption(opt);
+        qInfo() << "AnnotateTextItem: wrap mode=" << opt.wrapMode();
+    }
     setTextWidth(160);
-    qInfo() << "AnnotateTextItem: created width=" << textWidth();
+    qInfo() << "AnnotateTextItem: created width=" << textWidth()
+            << "docW=" << (doc ? doc->size().width() : -1);
 }
 
 int AnnotateTextItem::type() const
@@ -604,19 +654,89 @@ void AnnotateTextItem::endEdit()
 {
     setTextInteractionFlags(Qt::NoTextInteraction);
     clearFocus();
-    qInfo() << "AnnotateTextItem: endEdit text=" << toPlainText();
+    qInfo() << "AnnotateTextItem: endEdit text=" << toPlainText()
+            << "no wrap grip paint, width=" << textWidth();
 }
 
-void AnnotateTextItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void AnnotateTextItem::setTextSize(int size)
 {
-    QGraphicsTextItem::paint(painter, option, widget);
-    if (isEditing()) {
+    const int next = qBound(10, size, 48);
+    if (m_textSize == next) {
+        qInfo() << "AnnotateTextItem: setTextSize unchanged=" << next;
         return;
     }
-    const QRectF bounds = boundingRect();
-    const QRectF grip(bounds.right() - 6, bounds.center().y() - 8, 6, 16);
-    painter->fillRect(grip, QColor(40, 40, 40, 180));
+    m_textSize = next;
+    setData(kAnnotateRoleTextSize, m_textSize);
+    applyTextStyle();
+    qInfo() << "AnnotateTextItem: setTextSize=" << m_textSize;
 }
+
+int AnnotateTextItem::textSize() const
+{
+    return m_textSize;
+}
+
+void AnnotateTextItem::setTextOutline(bool on)
+{
+    if (m_textOutline == on) {
+        qInfo() << "AnnotateTextItem: setTextOutline unchanged=" << on;
+        return;
+    }
+    m_textOutline = on;
+    setData(kAnnotateRoleTextOutline, m_textOutline);
+    applyTextStyle();
+    qInfo() << "AnnotateTextItem: setTextOutline=" << m_textOutline;
+}
+
+bool AnnotateTextItem::textOutline() const
+{
+    return m_textOutline;
+}
+
+// ─── Ariadne's Thread [AT-0148] ─────────────────────
+// What: Apply pixel size and QTextCharFormat outline to the whole document
+// Why:  Size slider and Outline checkbox must update typed runs, not only defaultFont
+// Date: 2026-08-26
+// Related: [AT-0113] AnnotationCommands.cpp:applyTextItemColor, [AT-0040] AnnotateItems.h
+// ─────────────────────────────────────────────────────
+void AnnotateTextItem::applyTextStyle()
+{
+    QFont next = font();
+    next.setPixelSize(m_textSize);
+    setFont(next);
+    QTextDocument *doc = document();
+    const bool undoOn = doc && doc->isUndoRedoEnabled();
+    if (doc) {
+        doc->setUndoRedoEnabled(false);
+    }
+    const QTextCursor keep = textCursor();
+    QTextCharFormat fmt;
+    fmt.setFont(next);
+    fmt.setForeground(QBrush(defaultTextColor()));
+    if (m_textOutline) {
+        fmt.setTextOutline(QPen(contrastInk(defaultTextColor()), 2));
+    } else {
+        fmt.setTextOutline(QPen(Qt::NoPen));
+    }
+    if (doc) {
+        QTextCursor all(doc);
+        all.select(QTextCursor::Document);
+        all.mergeCharFormat(fmt);
+    }
+    setTextCursor(keep);
+    if (doc) {
+        doc->setUndoRedoEnabled(undoOn);
+    }
+    qInfo() << "AnnotateTextItem: applyTextStyle size=" << m_textSize << "outline=" << m_textOutline
+            << "color=" << defaultTextColor();
+}
+
+// ─── Ariadne's Thread [AT-0160] ─────────────────────
+// What: Stop painting the always-on 6x16 gray wrap grip on committed text
+// Why:  After endEdit the grip sat to the right of the glyphs; Select handles wrap width
+// Date: 2026-08-26
+// Related: [AT-0156] AnnotateWindow.cpp:paintSelectHandles, [AT-0040] AnnotateItems.h:AnnotateTextItem
+// ─────────────────────────────────────────────────────
 
 StepBadgeItem::StepBadgeItem(int seq, const QColor &color)
     : QGraphicsRectItem(QRectF(-14, -14, 28, 28))
@@ -674,15 +794,225 @@ void StepBadgeItem::applyColor(const QColor &color)
             << "ink=" << m_ink;
 }
 
+void StepBadgeItem::setDigitSize(int size)
+{
+    const int next = qBound(10, size, 48);
+    if (m_digitSize == next) {
+        qInfo() << "StepBadgeItem: setDigitSize unchanged=" << next;
+        return;
+    }
+    m_digitSize = next;
+    setData(kAnnotateRoleTextSize, m_digitSize);
+    const qreal radius = static_cast<qreal>(m_digitSize);
+    setRect(QRectF(-radius, -radius, radius * 2.0, radius * 2.0));
+    update();
+    qInfo() << "StepBadgeItem: setDigitSize=" << m_digitSize << "radius=" << radius;
+}
+
+int StepBadgeItem::digitSize() const
+{
+    return m_digitSize;
+}
+
+void StepBadgeItem::setTextOutline(bool on)
+{
+    if (m_textOutline == on) {
+        qInfo() << "StepBadgeItem: setTextOutline unchanged=" << on;
+        return;
+    }
+    m_textOutline = on;
+    setData(kAnnotateRoleTextOutline, m_textOutline);
+    update();
+    qInfo() << "StepBadgeItem: setTextOutline=" << m_textOutline;
+}
+
+bool StepBadgeItem::textOutline() const
+{
+    return m_textOutline;
+}
+
+qreal StepBadgeItem::badgeRadius() const
+{
+    return rect().width() / 2.0;
+}
+
 void StepBadgeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
     QGraphicsRectItem::paint(painter, option, widget);
-    painter->setPen(m_ink);
+    const QString label = QString::number(m_number);
     QFont font = painter->font();
     font.setBold(true);
-    font.setPixelSize(14);
+    font.setPixelSize(m_digitSize);
     painter->setFont(font);
-    painter->drawText(rect(), Qt::AlignCenter, QString::number(m_number));
+    const QFontMetrics metrics(font);
+    const QRectF box = rect();
+    const QRectF textBox = metrics.boundingRect(label);
+    const qreal x = box.center().x() - textBox.width() / 2.0 - textBox.left();
+    const qreal y = box.center().y() + (metrics.ascent() - metrics.descent()) / 2.0;
+    QPainterPath path;
+    path.addText(QPointF(x, y), font, label);
+    if (m_textOutline) {
+        painter->strokePath(path, QPen(contrastInk(m_ink), 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    }
+    painter->fillPath(path, m_ink);
+}
+
+namespace {
+
+QGraphicsRectItem *stepsRectOf(QGraphicsItem *item)
+{
+    if (!item) {
+        return nullptr;
+    }
+    if (annotateKind(item) == AnnotateKind::Highlight && highlightStyle(item) == HighlightStyle::Steps) {
+        return qgraphicsitem_cast<QGraphicsRectItem *>(item);
+    }
+    if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(item)) {
+        return qgraphicsitem_cast<QGraphicsRectItem *>(badge->parentItem());
+    }
+    return nullptr;
+}
+
+// ─── Ariadne's Thread [AT-0151] ─────────────────────
+// What: Resolve Steps fit/clamp against the screenshot pixmap, never padded sceneRect
+// Why:  Empty shot (item off scene) clamped badges to origin; canvas pad sat outside the shot
+// Date: 2026-08-26
+// Related: [AT-0134] AnnotateItems.cpp:placeHighlightStepBadge, [AT-0056] AnnotateWindow.cpp:applyCanvasChrome
+// ─────────────────────────────────────────────────────
+QRectF shotRectOfItem(const QGraphicsItem *item)
+{
+    if (!item) {
+        qWarning() << "shotRectOfItem: null item";
+        return QRectF();
+    }
+    QGraphicsScene *scene = item->scene();
+    if (!scene) {
+        qWarning() << "shotRectOfItem: item not on scene";
+        return QRectF();
+    }
+    const auto items = scene->items();
+    for (QGraphicsItem *it : items) {
+        auto *photo = qgraphicsitem_cast<ShotPhotoItem *>(it);
+        if (!photo) {
+            continue;
+        }
+        const QRectF shot = photo->mapRectToScene(photo->boundingRect());
+        qInfo() << "shotRectOfItem: shot=" << shot << "bounds=" << photo->boundingRect()
+                << "pixmap=" << photo->pixmap().size() << "sceneRect=" << scene->sceneRect();
+        return shot;
+    }
+    qWarning() << "shotRectOfItem: no ShotPhotoItem sceneRect=" << scene->sceneRect();
+    return QRectF();
+}
+
+void relayoutStepsBadge(QGraphicsRectItem *rect)
+{
+    if (!rect) {
+        qWarning() << "relayoutStepsBadge: null rect";
+        return;
+    }
+    const QRectF shot = shotRectOfItem(rect);
+    if (shot.isEmpty()) {
+        qWarning() << "relayoutStepsBadge: skip empty shot hasScene=" << (rect->scene() != nullptr)
+                   << "box=" << rect->rect();
+        return;
+    }
+    QPointF cursor = rect->mapToScene(rect->rect().center());
+    for (QGraphicsItem *child : rect->childItems()) {
+        if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+            cursor = badge->mapToScene(badge->rect().center());
+            break;
+        }
+    }
+    placeHighlightStepBadge(rect, shot, cursor);
+    qInfo() << "relayoutStepsBadge: cursor=" << cursor << "shot=" << shot << "box=" << rect->rect();
+}
+
+} // namespace
+
+int annotateTextSize(const QGraphicsItem *item)
+{
+    if (!item) {
+        return 18;
+    }
+    QGraphicsItem *live = const_cast<QGraphicsItem *>(item);
+    if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(live)) {
+        return text->textSize();
+    }
+    if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(live)) {
+        return badge->digitSize();
+    }
+    if (annotateKind(item) == AnnotateKind::Highlight && highlightStyle(item) == HighlightStyle::Steps) {
+        for (QGraphicsItem *child : live->childItems()) {
+            if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+                return badge->digitSize();
+            }
+        }
+    }
+    return 18;
+}
+
+bool annotateTextOutline(const QGraphicsItem *item)
+{
+    if (!item) {
+        return false;
+    }
+    QGraphicsItem *live = const_cast<QGraphicsItem *>(item);
+    if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(live)) {
+        return text->textOutline();
+    }
+    if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(live)) {
+        return badge->textOutline();
+    }
+    if (annotateKind(item) == AnnotateKind::Highlight && highlightStyle(item) == HighlightStyle::Steps) {
+        for (QGraphicsItem *child : live->childItems()) {
+            if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+                return badge->textOutline();
+            }
+        }
+    }
+    return false;
+}
+
+void applyAnnotateTextSize(QGraphicsItem *item, int size)
+{
+    const int next = qBound(10, size, 48);
+    if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(item)) {
+        text->setTextSize(next);
+        qInfo() << "applyAnnotateTextSize: text size=" << next;
+        return;
+    }
+    if (QGraphicsRectItem *rect = stepsRectOf(item)) {
+        for (QGraphicsItem *child : rect->childItems()) {
+            if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+                badge->setDigitSize(next);
+            }
+        }
+        relayoutStepsBadge(rect);
+        qInfo() << "applyAnnotateTextSize: steps size=" << next << "onScene=" << (rect->scene() != nullptr)
+                << "box=" << rect->rect();
+        return;
+    }
+    qInfo() << "applyAnnotateTextSize: skip kind=" << (item ? static_cast<int>(annotateKind(item)) : -1);
+}
+
+void applyAnnotateTextOutline(QGraphicsItem *item, bool on)
+{
+    if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(item)) {
+        text->setTextOutline(on);
+        qInfo() << "applyAnnotateTextOutline: text on=" << on;
+        return;
+    }
+    if (QGraphicsRectItem *rect = stepsRectOf(item)) {
+        for (QGraphicsItem *child : rect->childItems()) {
+            if (auto *badge = qgraphicsitem_cast<StepBadgeItem *>(child)) {
+                badge->setTextOutline(on);
+            }
+        }
+        qInfo() << "applyAnnotateTextOutline: steps on=" << on;
+        return;
+    }
+    qInfo() << "applyAnnotateTextOutline: skip kind=" << (item ? static_cast<int>(annotateKind(item)) : -1);
 }
 
 ShotPhotoItem::ShotPhotoItem(const QPixmap &pixmap)
@@ -745,9 +1075,11 @@ int AnnotatePhotoItem::type() const
 bool AnnotatePhotoItem::isScaleHandle(const QPointF &itemPos) const
 {
     const QRectF bounds = boundingRect();
-    const QRectF grip(bounds.right() - 14, bounds.bottom() - 14, 14, 14);
-    const bool hit = grip.contains(itemPos);
-    qInfo() << "AnnotatePhotoItem: scale handle hit=" << hit << itemPos << grip;
+    const qreal m = 10;
+    const bool inside = bounds.adjusted(-m, -m, m, m).contains(itemPos);
+    const bool interior = bounds.adjusted(m, m, -m, -m).contains(itemPos);
+    const bool hit = inside && !interior;
+    qInfo() << "AnnotatePhotoItem: scale handle hit=" << hit << itemPos << bounds;
     return hit;
 }
 
@@ -792,10 +1124,3 @@ qreal AnnotatePhotoItem::photoScale() const
     return scale();
 }
 
-void AnnotatePhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
-{
-    QGraphicsPixmapItem::paint(painter, option, widget);
-    const QRectF bounds = boundingRect();
-    const QRectF grip(bounds.right() - 10, bounds.bottom() - 10, 10, 10);
-    painter->fillRect(grip, QColor(40, 40, 40, 180));
-}

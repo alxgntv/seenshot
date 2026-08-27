@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SeenShot VERSION 0.1.2 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 0.1.3 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,21 +41,20 @@ set(SEENSHOT_SOURCES
     client/src/app/MacIcons.mm
     client/src/app/MacLoginItem.mm
     client/src/app/MacUrlHandler.mm
-    client/src/auth/MacGoogleAuth.mm
     client/src/errors/ErrorCatalog.cpp
     client/src/capture/RegionPicker.cpp
     client/src/capture/ScreenCaptureBackend.mm
     client/src/annotate/AnnotateWindow.cpp
     client/src/annotate/AnnotationCommands.cpp
     client/src/annotate/AnnotateItems.cpp
-    client/src/annotate/HueColorSlider.cpp
     client/src/camera/CameraCapture.mm
     client/src/camera/PersonCutout.mm
     client/src/export/CloudPngEncoder.cpp
     client/src/hotkey/MacHotkeyBackend.mm
     client/src/auth/AuthSession.cpp
     client/src/auth/FirebaseAuthClient.cpp
-    client/src/auth/KeychainStore.mm
+    client/src/auth/KeychainStore.cpp
+    client/src/auth/MacOAuthClient.mm
     client/src/cloud/CloudClient.cpp
     client/src/local/LocalStore.cpp
     client/src/update/SparkleUpdater.mm
@@ -76,7 +75,7 @@ set_source_files_properties(
     client/src/camera/PersonCutout.mm
     client/src/app/MacLoginItem.mm
     client/src/app/MacUrlHandler.mm
-    client/src/auth/MacGoogleAuth.mm
+    client/src/auth/MacOAuthClient.mm
     PROPERTIES COMPILE_FLAGS "-fobjc-arc"
 )
 
@@ -140,18 +139,29 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Sparkle/Sparkle.framework")
     )
 endif()
 
-# ─── Ariadne's Thread [AT-0039] ─────────────────────
-# What: codesign the .app with a stable Apple Development identity after each build
-# Why:  ad-hoc CDHash changed every copy; Settings toggle stayed on the old hash
-# Date: 2026-08-25
-# Related: packaging/macos/SeenShot.entitlements
+# ─── Ariadne's Thread [AT-0179] ─────────────────────
+# What: Prefer Developer ID when CODESIGN_IDENTITY is unset
+# Why:  Apple Development vs /Applications Developer ID were two TCC identities; Settings showed one switch on
+# Date: 2026-08-26
+# Related: [AT-0039] CMakeLists.txt, packaging/macos/package_sparkle.sh, docs/macos-screen-recording.md
 # ─────────────────────────────────────────────────────
 if(APPLE)
     set(SEENSHOT_CODESIGN_IDENTITY "$ENV{CODESIGN_IDENTITY}")
     if(SEENSHOT_CODESIGN_IDENTITY STREQUAL "")
-        set(SEENSHOT_CODESIGN_IDENTITY "97F09F2576E6D7A376A28502AFC71A9095FAADA5")
+        execute_process(
+            COMMAND /usr/bin/security find-identity -v -p codesigning
+            OUTPUT_VARIABLE _seenshot_cs_out
+            ERROR_QUIET
+        )
+        if(_seenshot_cs_out MATCHES "\"(Developer ID Application: [^\"]+)\"")
+            set(SEENSHOT_CODESIGN_IDENTITY "${CMAKE_MATCH_1}")
+        else()
+            set(SEENSHOT_CODESIGN_IDENTITY "97F09F2576E6D7A376A28502AFC71A9095FAADA5")
+        endif()
     endif()
+    message(STATUS "SeenShot codesign identity: ${SEENSHOT_CODESIGN_IDENTITY}")
     add_custom_command(TARGET SeenShot POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "codesign SeenShot.app identity=${SEENSHOT_CODESIGN_IDENTITY}"
         COMMAND /usr/bin/codesign --force --sign "${SEENSHOT_CODESIGN_IDENTITY}"
             --entitlements "${CMAKE_SOURCE_DIR}/packaging/macos/SeenShot.entitlements"
             --options runtime --timestamp=none

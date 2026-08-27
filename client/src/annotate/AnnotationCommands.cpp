@@ -86,6 +86,9 @@ void applyItemColor(QGraphicsItem *item, const QColor &color)
     }
     if (kind == AnnotateKind::Text) {
         applyTextItemColor(static_cast<QGraphicsTextItem *>(item), color);
+        if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(item)) {
+            text->applyTextStyle();
+        }
         return;
     }
     if (kind == AnnotateKind::Arrow || kind == AnnotateKind::Line) {
@@ -177,14 +180,27 @@ void AddItemCommand::undo()
     }
 }
 
+// ─── Ariadne's Thread [AT-0154] ─────────────────────
+// What: Always sync step numbers after add, even if the item is already on the scene
+// Why:  Steps stay on-scene for badge layout; skipping redo left every digit at 1
+// Date: 2026-08-26
+// Related: [AT-0152] AnnotateWindow.cpp:onSceneReleased, [AT-0041] AnnotateItems.cpp:syncStepNumbers
+// ─────────────────────────────────────────────────────
 void AddItemCommand::redo()
 {
-    qInfo() << "AddItemCommand: redo";
-    if (m_scene && m_item && m_item->scene() != m_scene) {
-        m_scene->addItem(m_item);
-        m_owns = false;
-        syncStepNumbers(m_scene);
+    if (!m_scene || !m_item) {
+        qWarning() << "AddItemCommand: redo missing scene or item";
+        return;
     }
+    const bool alreadyOn = (m_item->scene() == m_scene);
+    qInfo() << "AddItemCommand: redo alreadyOn=" << alreadyOn
+            << "kind=" << static_cast<int>(annotateKind(m_item));
+    if (!alreadyOn) {
+        m_scene->addItem(m_item);
+        qInfo() << "AddItemCommand: redo added to scene";
+    }
+    m_owns = false;
+    syncStepNumbers(m_scene);
 }
 
 RemoveItemCommand::RemoveItemCommand(QGraphicsScene *scene, QGraphicsItem *item, QUndoCommand *parent)
@@ -313,6 +329,68 @@ bool ChangeStrokeWidthCommand::mergeWith(const QUndoCommand *other)
     m_new = next->m_new;
     qInfo() << "ChangeStrokeWidthCommand: merge new=" << m_new << "gesture=" << m_gestureId;
     return true;
+}
+
+ChangeTextSizeCommand::ChangeTextSizeCommand(QGraphicsItem *item, int size, int gestureId, QUndoCommand *parent)
+    : QUndoCommand(parent)
+    , m_item(item)
+    , m_old(annotateTextSize(item))
+    , m_new(size)
+    , m_gestureId(gestureId)
+{
+    setText(QStringLiteral("Change text size"));
+    qInfo() << "ChangeTextSizeCommand: construct old=" << m_old << "new=" << m_new << "gesture=" << m_gestureId;
+}
+
+void ChangeTextSizeCommand::undo()
+{
+    qInfo() << "ChangeTextSizeCommand: undo" << m_old;
+    applyAnnotateTextSize(m_item, m_old);
+}
+
+void ChangeTextSizeCommand::redo()
+{
+    qInfo() << "ChangeTextSizeCommand: redo" << m_new;
+    applyAnnotateTextSize(m_item, m_new);
+}
+
+int ChangeTextSizeCommand::id() const
+{
+    return 4106;
+}
+
+bool ChangeTextSizeCommand::mergeWith(const QUndoCommand *other)
+{
+    const auto *next = dynamic_cast<const ChangeTextSizeCommand *>(other);
+    if (!next || next->m_item != m_item || next->m_gestureId != m_gestureId) {
+        qInfo() << "ChangeTextSizeCommand: merge rejected";
+        return false;
+    }
+    m_new = next->m_new;
+    qInfo() << "ChangeTextSizeCommand: merge new=" << m_new << "gesture=" << m_gestureId;
+    return true;
+}
+
+ChangeTextOutlineCommand::ChangeTextOutlineCommand(QGraphicsItem *item, bool on, QUndoCommand *parent)
+    : QUndoCommand(parent)
+    , m_item(item)
+    , m_old(annotateTextOutline(item))
+    , m_new(on)
+{
+    setText(QStringLiteral("Change text outline"));
+    qInfo() << "ChangeTextOutlineCommand: construct old=" << m_old << "new=" << m_new;
+}
+
+void ChangeTextOutlineCommand::undo()
+{
+    qInfo() << "ChangeTextOutlineCommand: undo" << m_old;
+    applyAnnotateTextOutline(m_item, m_old);
+}
+
+void ChangeTextOutlineCommand::redo()
+{
+    qInfo() << "ChangeTextOutlineCommand: redo" << m_new;
+    applyAnnotateTextOutline(m_item, m_new);
 }
 
 ChangeFillAlphaCommand::ChangeFillAlphaCommand(QGraphicsItem *item, int alpha, int gestureId, QUndoCommand *parent)
@@ -496,31 +574,43 @@ bool ChangePhotoPosCommand::mergeWith(const QUndoCommand *other)
     return true;
 }
 
-ChangePhotoScaleCommand::ChangePhotoScaleCommand(QGraphicsItem *item, qreal oldScale, qreal newScale, int gestureId,
+// ─── Ariadne's Thread [AT-0166] ─────────────────────
+// What: Store photo pos on scale undo so left/top edge scale can restore the opposite edge
+// Why:  Uniform scale from a left or top handle moves pos; scale-only undo jumped the cutout
+// Date: 2026-08-26
+// Related: [AT-0166] AnnotateWindow.cpp:applyPhotoScaleFromHandle
+// ─────────────────────────────────────────────────────
+ChangePhotoScaleCommand::ChangePhotoScaleCommand(QGraphicsItem *item, qreal oldScale, qreal newScale,
+                                                 const QPointF &oldPos, const QPointF &newPos, int gestureId,
                                                  QUndoCommand *parent)
     : QUndoCommand(parent)
     , m_item(item)
     , m_old(oldScale)
     , m_new(newScale)
+    , m_oldPos(oldPos)
+    , m_newPos(newPos)
     , m_gestureId(gestureId)
 {
     setText(QStringLiteral("Scale photo"));
-    qInfo() << "ChangePhotoScaleCommand: construct old=" << m_old << "new=" << m_new << "gesture=" << m_gestureId;
+    qInfo() << "ChangePhotoScaleCommand: construct old=" << m_old << "new=" << m_new << "oldPos=" << m_oldPos
+            << "newPos=" << m_newPos << "gesture=" << m_gestureId;
 }
 
 void ChangePhotoScaleCommand::undo()
 {
-    qInfo() << "ChangePhotoScaleCommand: undo" << m_old;
+    qInfo() << "ChangePhotoScaleCommand: undo scale=" << m_old << "pos=" << m_oldPos;
     if (m_item) {
         m_item->setScale(m_old);
+        m_item->setPos(m_oldPos);
     }
 }
 
 void ChangePhotoScaleCommand::redo()
 {
-    qInfo() << "ChangePhotoScaleCommand: redo" << m_new;
+    qInfo() << "ChangePhotoScaleCommand: redo scale=" << m_new << "pos=" << m_newPos;
     if (m_item) {
         m_item->setScale(m_new);
+        m_item->setPos(m_newPos);
     }
 }
 
@@ -537,7 +627,8 @@ bool ChangePhotoScaleCommand::mergeWith(const QUndoCommand *other)
         return false;
     }
     m_new = next->m_new;
-    qInfo() << "ChangePhotoScaleCommand: merge new=" << m_new << "gesture=" << m_gestureId;
+    m_newPos = next->m_newPos;
+    qInfo() << "ChangePhotoScaleCommand: merge new=" << m_new << "newPos=" << m_newPos << "gesture=" << m_gestureId;
     return true;
 }
 

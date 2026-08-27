@@ -4,6 +4,8 @@
 #include <QGuiApplication>
 #include <QHideEvent>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QMoveEvent>
 #include <QPainter>
 #include <QScreen>
 #include <QShowEvent>
@@ -17,14 +19,28 @@ RegionPicker::RegionPicker(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setCursor(Qt::CrossCursor);
+    setGeometry(screenUnion());
+    qInfo() << "RegionPicker: overlay geometry" << geometry() << " screens=" << QGuiApplication::screens().size()
+            << " alwaysShowTool=" << testAttribute(Qt::WA_MacAlwaysShowToolWindow);
+}
+
+QRect RegionPicker::screenUnion() const
+{
     QRect unionRect;
     const auto screens = QGuiApplication::screens();
     for (QScreen *screen : screens) {
         unionRect = unionRect.united(screen->geometry());
     }
-    setGeometry(unionRect);
-    qInfo() << "RegionPicker: overlay geometry" << unionRect << " screens=" << screens.size()
-            << " alwaysShowTool=" << testAttribute(Qt::WA_MacAlwaysShowToolWindow);
+    return unionRect;
+}
+
+void RegionPicker::syncRubberFromGlobal(const QPoint &globalNow)
+{
+    const QPoint a = mapFromGlobal(m_originGlobal);
+    const QPoint b = mapFromGlobal(globalNow);
+    m_rubber = QRect(a, b).normalized();
+    qInfo() << "RegionPicker: rubber local=" << m_rubber << " originGlobal=" << m_originGlobal
+            << " nowGlobal=" << globalNow << " geo=" << geometry();
 }
 
 // ─── Ariadne's Thread [AT-0117] ─────────────────────
@@ -44,9 +60,38 @@ void RegionPicker::showEvent(QShowEvent *event)
 
 void RegionPicker::hideEvent(QHideEvent *event)
 {
+    if (mouseGrabber() == this) {
+        releaseMouse();
+        qInfo() << "RegionPicker: hideEvent releaseMouse";
+    }
     releaseKeyboard();
     QWidget::hideEvent(event);
     qInfo() << "RegionPicker: hideEvent";
+}
+
+// ─── Ariadne's Thread [AT-0164] ─────────────────────
+// What: Snap RegionPicker back if macOS drags the overlay from the first pixels
+// Why:  press (28,5) then release QRect(28,-66) meant the window moved and captured 25x71
+// Date: 2026-08-26
+// Related: [AT-0163] MacPermissions.mm:pinCaptureOverlay, [AT-0010] RegionPicker.cpp
+// ─────────────────────────────────────────────────────
+void RegionPicker::moveEvent(QMoveEvent *event)
+{
+    QWidget::moveEvent(event);
+    if (m_snapping) {
+        qInfo() << "RegionPicker: moveEvent skip snap old=" << event->oldPos() << " pos=" << event->pos();
+        return;
+    }
+    const QRect lock = screenUnion();
+    if (geometry() == lock) {
+        qInfo() << "RegionPicker: moveEvent already locked geo=" << geometry();
+        return;
+    }
+    qWarning() << "RegionPicker: window moved old=" << event->oldPos() << " pos=" << event->pos()
+               << " geo=" << geometry() << " snap=" << lock;
+    m_snapping = true;
+    setGeometry(lock);
+    m_snapping = false;
 }
 
 void RegionPicker::paintEvent(QPaintEvent *)
@@ -65,9 +110,11 @@ void RegionPicker::paintEvent(QPaintEvent *)
 void RegionPicker::mousePressEvent(QMouseEvent *event)
 {
     m_dragging = true;
-    m_origin = event->pos();
-    m_rubber = QRect(m_origin, QSize());
-    qInfo() << "RegionPicker: press" << m_origin;
+    m_originGlobal = event->globalPosition().toPoint();
+    grabMouse();
+    syncRubberFromGlobal(m_originGlobal);
+    qInfo() << "RegionPicker: press local=" << event->pos() << " global=" << m_originGlobal
+            << " geo=" << geometry();
     update();
 }
 
@@ -76,7 +123,7 @@ void RegionPicker::mouseMoveEvent(QMouseEvent *event)
     if (!m_dragging) {
         return;
     }
-    m_rubber = QRect(m_origin, event->pos()).normalized();
+    syncRubberFromGlobal(event->globalPosition().toPoint());
     update();
 }
 
@@ -86,11 +133,16 @@ void RegionPicker::mouseReleaseEvent(QMouseEvent *event)
         return;
     }
     m_dragging = false;
-    m_rubber = QRect(m_origin, event->pos()).normalized();
-    const QRect global(mapToGlobal(m_rubber.topLeft()), m_rubber.size());
-    qInfo() << "RegionPicker: release local=" << m_rubber << " global=" << global;
+    if (mouseGrabber() == this) {
+        releaseMouse();
+    }
+    const QPoint now = event->globalPosition().toPoint();
+    const QRect global = QRect(m_originGlobal, now).normalized();
+    qInfo() << "RegionPicker: release originGlobal=" << m_originGlobal << " now=" << now
+            << " global=" << global << " geo=" << geometry();
     hide();
     if (global.width() < 4 || global.height() < 4) {
+        qInfo() << "RegionPicker: cancelled tiny global=" << global;
         emit cancelled();
         return;
     }

@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { isDisposableEmail } from "./disposableEmail";
 
 // ─── Ariadne's Thread [AT-0029] ─────────────────────
 // What: Verify Firebase ID tokens with Google JWKS
@@ -26,6 +27,17 @@ export async function verifyFirebaseToken(authHeader: string | null, projectId: 
     console.warn("auth: token has no uid");
     throw new Error("STORAGE_NEED_SIGN_IN");
   }
-  console.log(`auth: verified uid=${uid}`);
+  const email = typeof payload.email === "string" ? payload.email : "";
+  console.log(`auth: verified uid=${uid} emailChars=${email.length}`);
+  // ─── Ariadne's Thread [AT-0187] ─────────────────────
+  // What: Reject ID tokens whose email domain is on the official blocklist
+  // Why:  Mac upload API must not accept throwaway-mail accounts
+  // Date: 2026-08-27
+  // Related: [AT-0186] backend/src/disposableEmail.ts:isDisposableEmail, [AT-0029] backend/src/auth.ts:verifyFirebaseToken
+  // ─────────────────────────────────────────────────────
+  if (email && isDisposableEmail(email)) {
+    console.warn(`auth: disposable email uid=${uid} emailChars=${email.length}`);
+    throw new Error("AUTH_DISPOSABLE_EMAIL");
+  }
   return uid;
 }

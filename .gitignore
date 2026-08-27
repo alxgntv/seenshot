@@ -1,6 +1,7 @@
 build/
 backend/node_modules/
 backend/.dev.vars
+backend/.wrangler/
 .DS_Store
 *.user
 CMakeUserPresets.json

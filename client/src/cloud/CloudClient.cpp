@@ -69,12 +69,21 @@ bool CloudClient::authorizedJson(const QString &method, const QString &path, con
     return true;
 }
 
-bool CloudClient::presignAndPut(const QByteArray &png, QString *shotId, QString *errorCode)
+// ─── Ariadne's Thread [AT-0170] ─────────────────────
+// What: Abort PUT only when no bytes move (QNetworkRequest::setTransferTimeout)
+// Why:  Hard 60s QTimer killed 3.8 MB Worker PUTs that were still transferring
+// Date: 2026-08-26
+// Related: [AT-0169] AnnotateWindow.cpp:share, [AT-0167] backend/src/index.ts:putInbox
+// ─────────────────────────────────────────────────────
+bool CloudClient::presignAndPut(const QByteArray &png, const QString &fileId, QString *shotId, QString *errorCode,
+                               const CloudUploadProgress &progress)
 {
     QJsonObject body;
     body.insert(QStringLiteral("bytes"), png.size());
     body.insert(QStringLiteral("contentType"), QStringLiteral("image/png"));
+    body.insert(QStringLiteral("fileId"), fileId);
     QByteArray response;
+    qInfo() << "CloudClient: presign fileId=" << fileId << " pngBytes=" << png.size();
     if (!authorizedJson(QStringLiteral("POST"), QStringLiteral("/v1/uploads/presign"),
                         QJsonDocument(body).toJson(QJsonDocument::Compact), &response, errorCode)) {
         return false;
@@ -82,28 +91,30 @@ bool CloudClient::presignAndPut(const QByteArray &png, QString *shotId, QString 
     const QJsonObject json = QJsonDocument::fromJson(response).object();
     *shotId = json.value(QStringLiteral("shotId")).toString();
     const QString uploadUrl = json.value(QStringLiteral("uploadUrl")).toString();
-    qInfo() << "CloudClient: presign shotId=" << *shotId << " pngBytes=" << png.size();
+    qInfo() << "CloudClient: presign shotId=" << *shotId << " pngBytes=" << png.size() << " fileId=" << fileId;
     QNetworkRequest putRequest{QUrl(uploadUrl)};
     putRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("image/png"));
+    putRequest.setHeader(QNetworkRequest::ContentLengthHeader, png.size());
+    putRequest.setTransferTimeout(60000);
     QNetworkReply *reply = m_nam->put(putRequest, png);
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QTimer::singleShot(60000, &loop, &QEventLoop::quit);
-    loop.exec();
-    if (!reply->isFinished()) {
-        reply->abort();
-        reply->deleteLater();
-        if (errorCode) {
-            *errorCode = QStringLiteral("UPLOAD_FAILED");
+    QObject::connect(reply, &QNetworkReply::uploadProgress, &loop, [&progress](qint64 sent, qint64 total) {
+        qInfo() << "CloudClient: R2 PUT progress sent=" << sent << " total=" << total;
+        if (progress) {
+            progress(sent, total);
         }
-        return false;
-    }
+    });
+    loop.exec();
+    const QNetworkReply::NetworkError netError = reply->error();
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QByteArray putBody = reply->readAll();
+    const QString netErrorString = reply->errorString();
     reply->deleteLater();
-    qInfo() << "CloudClient: R2 PUT status=" << status;
-    if (status < 200 || status >= 300) {
-        qWarning() << "CloudClient: R2 PUT failed" << QString::fromUtf8(putBody).left(400);
+    qInfo() << "CloudClient: R2 PUT status=" << status << " netError=" << static_cast<int>(netError)
+            << netErrorString;
+    if (netError != QNetworkReply::NoError || status < 200 || status >= 300) {
+        qWarning() << "CloudClient: R2 PUT failed status=" << status << " body=" << QString::fromUtf8(putBody).left(400);
         if (errorCode) {
             *errorCode = QStringLiteral("UPLOAD_FAILED");
         }
@@ -136,26 +147,29 @@ bool CloudClient::confirm(const QString &shotId, bool publish, CloudConfirmResul
     return true;
 }
 
-bool CloudClient::uploadPrivate(const QByteArray &png, CloudConfirmResult *result, QString *errorCode)
+bool CloudClient::uploadPrivate(const QByteArray &png, const QString &fileId, CloudConfirmResult *result, QString *errorCode)
 {
     QString shotId;
-    if (!presignAndPut(png, &shotId, errorCode)) {
+    qInfo() << "CloudClient: uploadPrivate fileId=" << fileId << " pngBytes=" << png.size();
+    if (!presignAndPut(png, fileId, &shotId, errorCode)) {
         return false;
     }
     return confirm(shotId, false, result, errorCode);
 }
 
-bool CloudClient::uploadAndPublish(const QByteArray &png, QString *publicUrl, CloudConfirmResult *result,
-                                  QString *errorCode)
+bool CloudClient::uploadAndPublish(const QByteArray &png, const QString &fileId, QString *publicUrl, CloudConfirmResult *result,
+                                  QString *errorCode, const CloudUploadProgress &progress)
 {
     QString shotId;
-    if (!presignAndPut(png, &shotId, errorCode)) {
+    qInfo() << "CloudClient: uploadAndPublish fileId=" << fileId << " pngBytes=" << png.size();
+    if (!presignAndPut(png, fileId, &shotId, errorCode, progress)) {
         return false;
     }
     if (!confirm(shotId, true, result, errorCode)) {
         return false;
     }
     *publicUrl = result->publicUrl;
+    qInfo() << "CloudClient: uploadAndPublish publicUrl=" << *publicUrl << " shotId=" << shotId;
     return !publicUrl->isEmpty();
 }
 

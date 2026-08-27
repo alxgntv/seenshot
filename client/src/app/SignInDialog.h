@@ -5,16 +5,16 @@
 class AccountSignInPanel;
 class AuthSession;
 
-// ─── Ariadne's Thread [AT-0110] ─────────────────────
-// What: Modal sign-in over Share Link
-// Why:  PRD-04 — share needs a session; warning-only was not a login
+// ─── Ariadne's Thread [AT-0147] ─────────────────────
+// What: One application-modal sign-in dialog for Share and Settings
+// Why:  Settings must not embed a second login form
 // Date: 2026-08-26
-// Related: [AT-0109] AccountSignInPanel.h, [AT-0057] AnnotateWindow.cpp:share
+// Related: [AT-0110] SignInDialog.cpp, [AT-0109] AccountSignInPanel.h
 // ─────────────────────────────────────────────────────
 class SignInDialog : public QDialog {
     Q_OBJECT
 public:
-    static bool execShareSignIn(AuthSession *auth, QWidget *parent);
+    static bool execSignIn(AuthSession *auth, QWidget *parent);
 
 private:
     SignInDialog(AuthSession *auth, QWidget *parent);
