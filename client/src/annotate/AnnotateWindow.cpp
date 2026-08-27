@@ -2,6 +2,7 @@
 
 #include "annotate/AnnotationCommands.h"
 #include "app/Analytics.h"
+#include "app/Config.h"
 #include "app/MacIcons.h"
 #include "app/MacPermissions.h"
 #include "camera/CameraCapture.h"
@@ -19,10 +20,7 @@
 #include <QSignalBlocker>
 #include <QBrush>
 #include <QCheckBox>
-#include <QClipboard>
 #include <QCloseEvent>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QPointer>
 #include <QDateTime>
 #include <QDir>
@@ -55,8 +53,8 @@
 #include <QLineF>
 #include <QKeySequence>
 #include <QLabel>
-#include <QLineEdit>
 #include <QMessageBox>
+#include <QUrl>
 #include <QMouseEvent>
 #include <QMoveEvent>
 #include <QPainter>
@@ -1460,6 +1458,21 @@ void AnnotateWindow::share()
         return;
     }
     setShareBusy(true);
+    // ─── Ariadne's Thread [AT-0210] ─────────────────────
+    // What: Open /screenshot/{fileId}?uploading=1 in the default browser before PUT
+    // Why:  CloudClient QEventLoop would delay the tab until confirm; the site shows 0-100%
+    // Date: 2026-08-27
+    // Related: [AT-0209] MacPermissions.mm:openDefaultBrowser, [AT-0184] AnnotateWindow.cpp:makeShotFileId
+    // ─────────────────────────────────────────────────────
+    const QUrl sharePageUrl(Config::websiteBaseUrl() + QStringLiteral("/screenshot/") + m_fileId
+                            + QStringLiteral("?uploading=1"));
+    qInfo() << "AnnotateWindow: share open browser url=" << sharePageUrl.toString() << " fileId=" << m_fileId
+            << " cloudShotId=" << m_cloudShotId << " cloudShotEmpty=" << m_cloudShotId.isEmpty()
+            << " host=" << sharePageUrl.host() << " path=" << sharePageUrl.path();
+    if (!MacPermissions::openDefaultBrowser(sharePageUrl)) {
+        qWarning() << "AnnotateWindow: share open browser failed url=" << sharePageUrl.toString()
+                   << " fileId=" << m_fileId;
+    }
     QString url;
     CloudConfirmResult result;
     if (!m_cloudShotId.isEmpty()) {
@@ -1490,9 +1503,8 @@ void AnnotateWindow::share()
     if (!result.evictedIds.isEmpty()) {
         QMessageBox::information(this, QStringLiteral("SeenShot"), ErrorCatalog::message(QStringLiteral("QUOTA_EVICTED")));
     }
-    qInfo() << "AnnotateWindow: published" << url;
+    qInfo() << "AnnotateWindow: published" << url << " fileId=" << m_fileId << " cloudShotId=" << m_cloudShotId;
     Analytics::instance().track(QStringLiteral("share"));
-    showShareLink(url);
 }
 
 void AnnotateWindow::onWebsiteSignInSettled(const QString &errorCode)
@@ -1567,31 +1579,6 @@ void AnnotateWindow::setShareProgress(qint64 sent, qint64 total)
     m_shareProgress->setValue(static_cast<int>((sent * 1000) / total));
     qInfo() << "AnnotateWindow: share progress sent=" << sent << " total=" << total
             << " permille=" << m_shareProgress->value();
-}
-
-void AnnotateWindow::showShareLink(const QString &url)
-{
-    qInfo() << "AnnotateWindow: show share link" << url;
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("SeenShot"));
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *label = new QLabel(QStringLiteral("Share link"), &dialog);
-    auto *edit = new QLineEdit(url, &dialog);
-    edit->setReadOnly(true);
-    edit->setMinimumWidth(360);
-    edit->selectAll();
-    auto *buttons = new QDialogButtonBox(&dialog);
-    QPushButton *copyBtn = buttons->addButton(QStringLiteral("Copy"), QDialogButtonBox::ActionRole);
-    buttons->addButton(QDialogButtonBox::Ok);
-    layout->addWidget(label);
-    layout->addWidget(edit);
-    layout->addWidget(buttons);
-    QObject::connect(copyBtn, &QPushButton::clicked, &dialog, [url]() {
-        QGuiApplication::clipboard()->setText(url);
-        qInfo() << "AnnotateWindow: share link copied bytes=" << url.size();
-    });
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    dialog.exec();
 }
 
 QGraphicsItem *AnnotateWindow::selectedAnnotation() const

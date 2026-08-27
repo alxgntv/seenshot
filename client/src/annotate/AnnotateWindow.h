@@ -217,7 +217,6 @@ private:
     bool ensureOnlineSignedIn(QString *errorCode);
     void setShareBusy(bool busy);
     void setShareProgress(qint64 sent, qint64 total);
-    void showShareLink(const QString &url);
 
     QImage m_source;
     QGraphicsScene *m_scene = nullptr;

@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QString>
+#include <QUrl>
 #include <QWidget>
 
 #include <atomic>
@@ -22,6 +23,43 @@ void MacPermissions::activateApp()
 {
     [NSApp activateIgnoringOtherApps:YES];
     qInfo() << "MacPermissions: activateIgnoringOtherApps";
+}
+
+// ─── Ariadne's Thread [AT-0209] ─────────────────────
+// What: Open http(s) URLs in the default browser via NSWorkspace
+// Why:  Share must land on /screenshot/{id} in the same browser as website OAuth
+// Date: 2026-08-27
+// Related: [AT-0201] MacOAuthClient.mm:start, [AT-0210] AnnotateWindow.cpp:share
+// ─────────────────────────────────────────────────────
+bool MacPermissions::openDefaultBrowser(const QUrl &pageUrl)
+{
+    if (pageUrl.isEmpty() || !pageUrl.isValid()) {
+        qWarning() << "MacPermissions: openDefaultBrowser empty or invalid url=" << pageUrl.toString();
+        return false;
+    }
+    NSURL *url = pageUrl.toNSURL();
+    if (!url) {
+        qWarning() << "MacPermissions: openDefaultBrowser NSURL conversion failed url=" << pageUrl.toString();
+        return false;
+    }
+    qInfo() << "MacPermissions: openDefaultBrowser scheme=" << pageUrl.scheme() << " host=" << pageUrl.host()
+            << " path=" << pageUrl.path() << " query=" << pageUrl.query();
+    NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+    config.activates = YES;
+    [[NSWorkspace sharedWorkspace] openURL:url
+                             configuration:config
+                         completionHandler:^(NSRunningApplication *app, NSError *error) {
+                             const bool ok = (error == nil);
+                             const QString bundle = app.bundleIdentifier
+                                 ? QString::fromNSString(app.bundleIdentifier)
+                                 : QString();
+                             const QString errText = error
+                                 ? QString::fromNSString(error.localizedDescription)
+                                 : QString();
+                             qInfo() << "MacPermissions: openDefaultBrowser completion ok=" << ok
+                                     << " bundle=" << bundle << " error=" << errText;
+                         }];
+    return true;
 }
 
 // ─── Ariadne's Thread [AT-0118] ─────────────────────

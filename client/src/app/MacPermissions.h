@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QUrl>
 #include <functional>
 
 class QWidget;
@@ -8,6 +9,13 @@ class QWidget;
 class MacPermissions {
 public:
     static void activateApp();
+    // ─── Ariadne's Thread [AT-0209] ─────────────────────
+    // What: Open http(s) URLs in the default browser via NSWorkspace
+    // Why:  Share must land on /screenshot/{id} in the same browser as website OAuth
+    // Date: 2026-08-27
+    // Related: [AT-0201] MacOAuthClient.mm:start, [AT-0210] AnnotateWindow.cpp:share
+    // ─────────────────────────────────────────────────────
+    static bool openDefaultBrowser(const QUrl &pageUrl);
     static void pinCaptureOverlay(QWidget *overlay);
     static void pinFloatingToolWindow(QWidget *overlay);
     static void openScreenRecordingSettings();

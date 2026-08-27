@@ -119,13 +119,14 @@ async function serveShare(url: URL, env: Env): Promise<Response> {
       )
         .bind(id, id)
         .first();
-  // ─── Ariadne's Thread [AT-0167] ─────────────────────
-  // What: Load the share PNG from the R2 r2.dev public hostname
-  // Why:  No custom domain; r2.dev serves object key public/{id}.png
-  // Date: 2026-08-26
-  // Related: [AT-0167] backend/wrangler.toml, [AT-0032] backend/src/quota.ts:confirm
+  // ─── Ariadne's Thread [AT-0208] ─────────────────────
+  // What: Load the share PNG from seenshot.app/public/{id}.png
+  // Why:  Apex is the site Worker; R2 keys stay public/{id}.png, not r2.dev
+  // Date: 2026-08-27
+  // Related: [AT-0167] backend/wrangler.toml, [AT-0050] seenshot-web→src/index.ts:publicPng
   // ─────────────────────────────────────────────────────
   const imageUrl = `${env.R2_PUBLIC_BASE_URL}/public/${id}.png`;
+  console.log(`index: share imageUrl=${imageUrl} r2PublicBase=${env.R2_PUBLIC_BASE_URL} id=${id}`);
   const html = sharePage({
     publicId: id,
     imageUrl,
