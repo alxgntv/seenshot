@@ -160,9 +160,11 @@ private:
         P1,
         P2
     };
+    qreal selectHandleHalfScene() const;
     bool hitsScenePoint(const QPointF &target, const QPointF &scenePos) const;
     bool hitsSceneEdge(const QPointF &a, const QPointF &b, const QPointF &scenePos) const;
     SelectHandle hitSelectHandle(QGraphicsItem *item, const QPointF &scenePos) const;
+    bool tryStartHandleGesture(QGraphicsItem *item, const QPointF &scenePos);
     void applySelectResize(const QPointF &scenePos);
     void applyPhotoScaleFromHandle(AnnotatePhotoItem *photo, const QPointF &scenePos);
     void applySelectMove(const QPointF &scenePos);

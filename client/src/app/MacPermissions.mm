@@ -25,6 +25,43 @@ void MacPermissions::activateApp()
     qInfo() << "MacPermissions: activateIgnoringOtherApps";
 }
 
+// ─── Ariadne's Thread [AT-0300] ─────────────────────
+// What: Toggle NSApplicationActivationPolicy Regular vs Accessory
+// Why:  Dock icon only while first-run QWizard is open; LSUIElement stays in Info.plist
+// Date: 2026-08-28
+// Related: [AT-0303] Application.cpp:start, [AT-0302] FirstRunWizard.cpp
+// ─────────────────────────────────────────────────────
+bool MacPermissions::setDockVisible(bool visible)
+{
+    const NSApplicationActivationPolicy wanted = visible ? NSApplicationActivationPolicyRegular
+                                                         : NSApplicationActivationPolicyAccessory;
+    const NSApplicationActivationPolicy before = [NSApp activationPolicy];
+    const BOOL ok = [NSApp setActivationPolicy:wanted];
+    const NSApplicationActivationPolicy after = [NSApp activationPolicy];
+    qInfo() << "MacPermissions: setDockVisible visible=" << visible
+            << " wanted=" << static_cast<int>(wanted) << " before=" << static_cast<int>(before)
+            << " after=" << static_cast<int>(after) << " ok=" << static_cast<bool>(ok);
+    if (visible) {
+        activateApp();
+        const bool shown = after == NSApplicationActivationPolicyRegular;
+        if (!shown) {
+            qWarning() << "MacPermissions: setDockVisible Regular not applied";
+        }
+        return shown;
+    }
+    if (ok && after == NSApplicationActivationPolicyAccessory) {
+        qInfo() << "MacPermissions: setDockVisible Accessory applied";
+        return true;
+    }
+    qInfo() << "MacPermissions: Accessory incomplete, hide then retry";
+    [NSApp hide:nil];
+    const BOOL ok2 = [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    const NSApplicationActivationPolicy after2 = [NSApp activationPolicy];
+    qInfo() << "MacPermissions: setDockVisible hide-retry ok=" << static_cast<bool>(ok2)
+            << " after=" << static_cast<int>(after2);
+    return after2 == NSApplicationActivationPolicyAccessory;
+}
+
 // ─── Ariadne's Thread [AT-0209] ─────────────────────
 // What: Open http(s) URLs in the default browser via NSWorkspace
 // Why:  Share must land on /screenshot/{id} in the same browser as website OAuth

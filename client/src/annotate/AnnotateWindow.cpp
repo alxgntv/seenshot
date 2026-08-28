@@ -763,8 +763,15 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     spacer->setMinimumWidth(0);
     toolbar->addWidget(spacer);
-    QPushButton *saveBtn = makeNativeToolbarButton(QStringLiteral("Save"), true);
-    m_shareBtn = makeNativeToolbarButton(QStringLiteral("Share Link"), false);
+    // ─── Ariadne's Thread [AT-0311] ─────────────────────
+    // What: Share Link is the default (blue) bezel; Save is the gray button
+    // Why:  Share is the primary action; Save was drawing the accent by mistake
+    // Date: 2026-08-28
+    // Related: [AT-0071] AnnotateWindow.cpp:makeNativeToolbarButton
+    // ─────────────────────────────────────────────────────
+    QPushButton *saveBtn = makeNativeToolbarButton(QStringLiteral("Save"), false);
+    m_shareBtn = makeNativeToolbarButton(QStringLiteral("Share Link"), true);
+    qInfo() << "AnnotateWindow: Share Link default=true Save default=false";
     m_shareBtn->setMinimumWidth(m_shareBtn->sizeHint().width());
     m_shareBusy = new QProgressBar(m_shareBtn);
     m_shareBusy->setRange(0, 0);
@@ -2755,15 +2762,37 @@ void AnnotateWindow::commitTextEdit()
 // Date: 2026-08-25
 // Related: [AT-0066] AnnotateWindow.cpp:setToolSelect, [AT-0011] RemoveItemCommand
 // ─────────────────────────────────────────────────────
-bool AnnotateWindow::hitsScenePoint(const QPointF &target, const QPointF &scenePos) const
+// ─── Ariadne's Thread [AT-0310] ─────────────────────
+// What: Hit-test the painted Select handle square, including the outer half
+// Why:  A 10px circle around the corner missed the square; annotationItemAt ignored clicks outside the item
+// Date: 2026-08-28
+// Related: [AT-0156] AnnotateWindow.cpp:paintSelectHandles, [AT-0153] AnnotateWindow.cpp:hitSelectHandle
+// ─────────────────────────────────────────────────────
+qreal AnnotateWindow::selectHandleHalfScene() const
 {
     if (!m_view) {
-        return false;
+        qWarning() << "AnnotateWindow: selectHandleHalfScene no view";
+        return 4.0;
     }
-    const QPoint a = m_view->mapFromScene(target);
-    const QPoint b = m_view->mapFromScene(scenePos);
-    const bool hit = QLineF(QPointF(a), QPointF(b)).length() <= 10.0;
-    qInfo() << "AnnotateWindow: hitsScenePoint" << hit << "target=" << target << "pos=" << scenePos;
+    const qreal scale = m_view->transform().m11();
+    const qreal r = (scale > 0) ? (4.0 / scale) : 4.0;
+    return r;
+}
+
+bool AnnotateWindow::hitsScenePoint(const QPointF &target, const QPointF &scenePos) const
+{
+    const qreal r = selectHandleHalfScene();
+    qreal pad = 1.0;
+    if (m_view) {
+        const qreal scale = m_view->transform().m11();
+        if (scale > 0) {
+            pad = 1.0 / scale;
+        }
+    }
+    const QRectF box(target.x() - r - pad, target.y() - r - pad, (r + pad) * 2.0, (r + pad) * 2.0);
+    const bool hit = box.contains(scenePos);
+    qInfo() << "AnnotateWindow: hitsScenePoint" << hit << "target=" << target << "pos=" << scenePos
+            << "box=" << box << "r=" << r << "pad=" << pad;
     return hit;
 }
 
@@ -2828,15 +2857,9 @@ AnnotateWindow::SelectHandle AnnotateWindow::hitSelectHandle(QGraphicsItem *item
         return SelectHandle::None;
     }
     if (kind == AnnotateKind::Highlight || kind == AnnotateKind::Blur) {
-        // ─── Ariadne's Thread [AT-0163] ─────────────────────
-        // What: Hit-test Square/Blur handles on boundingRect, not bare rect()
-        // Why:  The first pixel of a thick stroke sits outside rect() and fell through to Move
-        // Date: 2026-08-26
-        // Related: [AT-0153] AnnotateWindow.cpp:hitSelectHandle, [AT-0066] AnnotateWindow.cpp:hitsScenePoint
-        // ─────────────────────────────────────────────────────
-        const QRectF box = item->mapRectToScene(item->boundingRect());
+        const QRectF box = itemSceneBox(item);
         qInfo() << "AnnotateWindow: hitSelectHandle visual box=" << box
-                << "inner=" << itemSceneBox(item) << "pos=" << scenePos;
+                << "bounds=" << item->mapRectToScene(item->boundingRect()) << "pos=" << scenePos;
         if (hitsScenePoint(box.topLeft(), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle TopLeft box=" << box;
             return SelectHandle::TopLeft;
@@ -2853,32 +2876,42 @@ AnnotateWindow::SelectHandle AnnotateWindow::hitSelectHandle(QGraphicsItem *item
             qInfo() << "AnnotateWindow: hitSelectHandle BottomRight box=" << box;
             return SelectHandle::BottomRight;
         }
-        if (hitsSceneEdge(box.topLeft(), box.topRight(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.center().x(), box.top()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle Top box=" << box;
             return SelectHandle::Top;
         }
-        if (hitsSceneEdge(box.bottomLeft(), box.bottomRight(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.center().x(), box.bottom()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle Bottom box=" << box;
             return SelectHandle::Bottom;
         }
-        if (hitsSceneEdge(box.topLeft(), box.bottomLeft(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.left(), box.center().y()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle Left box=" << box;
             return SelectHandle::Left;
         }
-        if (hitsSceneEdge(box.topRight(), box.bottomRight(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.right(), box.center().y()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle Right box=" << box;
+            return SelectHandle::Right;
+        }
+        if (hitsSceneEdge(box.topLeft(), box.topRight(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle Top edge box=" << box;
+            return SelectHandle::Top;
+        }
+        if (hitsSceneEdge(box.bottomLeft(), box.bottomRight(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle Bottom edge box=" << box;
+            return SelectHandle::Bottom;
+        }
+        if (hitsSceneEdge(box.topLeft(), box.bottomLeft(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle Left edge box=" << box;
+            return SelectHandle::Left;
+        }
+        if (hitsSceneEdge(box.topRight(), box.bottomRight(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle Right edge box=" << box;
             return SelectHandle::Right;
         }
         qInfo() << "AnnotateWindow: hitSelectHandle none on box=" << box << "pos=" << scenePos;
         return SelectHandle::None;
     }
     if (kind == AnnotateKind::Photo) {
-        // ─── Ariadne's Thread [AT-0166] ─────────────────────
-        // What: Hit-test Photo corners and edges with the same 10px slop as Square
-        // Why:  Photo scale used only a bottom-right grip; an edge press moved the cutout
-        // Date: 2026-08-26
-        // Related: [AT-0166] AnnotateWindow.cpp:applyPhotoScaleFromHandle, [AT-0153] AnnotateWindow.cpp:hitsSceneEdge
-        // ─────────────────────────────────────────────────────
         const QRectF box = itemSceneBox(item);
         if (hitsScenePoint(box.topLeft(), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle photo TopLeft box=" << box;
@@ -2896,20 +2929,36 @@ AnnotateWindow::SelectHandle AnnotateWindow::hitSelectHandle(QGraphicsItem *item
             qInfo() << "AnnotateWindow: hitSelectHandle photo BottomRight box=" << box;
             return SelectHandle::BottomRight;
         }
-        if (hitsSceneEdge(box.topLeft(), box.topRight(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.center().x(), box.top()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle photo Top box=" << box;
             return SelectHandle::Top;
         }
-        if (hitsSceneEdge(box.bottomLeft(), box.bottomRight(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.center().x(), box.bottom()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle photo Bottom box=" << box;
             return SelectHandle::Bottom;
         }
-        if (hitsSceneEdge(box.topLeft(), box.bottomLeft(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.left(), box.center().y()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle photo Left box=" << box;
             return SelectHandle::Left;
         }
-        if (hitsSceneEdge(box.topRight(), box.bottomRight(), scenePos)) {
+        if (hitsScenePoint(QPointF(box.right(), box.center().y()), scenePos)) {
             qInfo() << "AnnotateWindow: hitSelectHandle photo Right box=" << box;
+            return SelectHandle::Right;
+        }
+        if (hitsSceneEdge(box.topLeft(), box.topRight(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle photo Top edge box=" << box;
+            return SelectHandle::Top;
+        }
+        if (hitsSceneEdge(box.bottomLeft(), box.bottomRight(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle photo Bottom edge box=" << box;
+            return SelectHandle::Bottom;
+        }
+        if (hitsSceneEdge(box.topLeft(), box.bottomLeft(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle photo Left edge box=" << box;
+            return SelectHandle::Left;
+        }
+        if (hitsSceneEdge(box.topRight(), box.bottomRight(), scenePos)) {
+            qInfo() << "AnnotateWindow: hitSelectHandle photo Right edge box=" << box;
             return SelectHandle::Right;
         }
         qInfo() << "AnnotateWindow: hitSelectHandle photo none box=" << box << "pos=" << scenePos;
@@ -2931,6 +2980,58 @@ AnnotateWindow::SelectHandle AnnotateWindow::hitSelectHandle(QGraphicsItem *item
         return SelectHandle::None;
     }
     return SelectHandle::None;
+}
+
+bool AnnotateWindow::tryStartHandleGesture(QGraphicsItem *item, const QPointF &scenePos)
+{
+    if (!item) {
+        qInfo() << "AnnotateWindow: tryStartHandleGesture null item pos=" << scenePos;
+        return false;
+    }
+    const SelectHandle handle = hitSelectHandle(item, scenePos);
+    qInfo() << "AnnotateWindow: tryStartHandleGesture kind=" << static_cast<int>(annotateKind(item))
+            << "handle=" << static_cast<int>(handle) << "pos=" << scenePos;
+    if (handle == SelectHandle::None || handle == SelectHandle::Move) {
+        return false;
+    }
+    if (auto *photo = qgraphicsitem_cast<AnnotatePhotoItem *>(item)) {
+        ++m_photoScaleGestureId;
+        m_scalingPhoto = photo;
+        m_photoScaleHandle = handle;
+        m_photoOldScale = photo->photoScale();
+        m_photoOldPos = photo->pos();
+        m_resizeStart = scenePos;
+        qInfo() << "AnnotateWindow: handle gesture photo scale=" << m_photoOldScale
+                << "handle=" << static_cast<int>(handle) << "gesture=" << m_photoScaleGestureId;
+        return true;
+    }
+    m_selectWasSelected = item->isSelected();
+    selectAnnotation(item);
+    m_selectItem = item;
+    m_selectPressScene = scenePos;
+    m_selectOldPos = item->pos();
+    m_selectDidMove = false;
+    m_selectHandle = handle;
+    if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(item)) {
+        m_selectOldRect = rect->rect();
+    }
+    m_selectOldP1 = annotateP1(item);
+    m_selectOldP2 = annotateP2(item);
+    if (auto *pix = qgraphicsitem_cast<QGraphicsPixmapItem *>(item)) {
+        m_selectOldBlurPos = pix->pos();
+        m_selectOldBlurSource = pix->data(kAnnotateRoleBlurSource).value<QImage>();
+    }
+    if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(item)) {
+        m_selectOldWidth = text->textWidth();
+        if (m_selectOldWidth < 0) {
+            m_selectOldWidth = text->boundingRect().width();
+        }
+        qInfo() << "AnnotateWindow: handle gesture text oldWidth=" << m_selectOldWidth
+                << "handle=" << static_cast<int>(handle);
+    }
+    qInfo() << "AnnotateWindow: handle gesture start kind=" << static_cast<int>(annotateKind(item))
+            << "handle=" << static_cast<int>(handle) << "wasSelected=" << m_selectWasSelected;
+    return true;
 }
 
 void AnnotateWindow::clampItemToShot(QGraphicsItem *item) const
@@ -3364,8 +3465,7 @@ void AnnotateWindow::paintSelectHandles(QPainter *painter) const
         return;
     }
     const AnnotateKind kind = annotateKind(item);
-    const qreal scale = m_view->transform().m11();
-    const qreal r = (scale > 0) ? (4.0 / scale) : 4.0;
+    const qreal r = selectHandleHalfScene();
     painter->setPen(QPen(Qt::white, 0));
     painter->setBrush(QColor(40, 40, 40, 220));
     auto paintAt = [&](const QPointF &pt) {
@@ -3514,22 +3614,20 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
     }
     if (m_tool == Tool::Select) {
         commitTextEdit();
+        if (tryStartHandleGesture(selectedAnnotation(), scenePos)) {
+            m_drawing = false;
+            qInfo() << "AnnotateWindow: select press handle on selected";
+            return false;
+        }
         QGraphicsItem *hit = annotationItemAt(scenePos);
         m_selectWasSelected = hit && hit->isSelected();
         selectAnnotation(hit);
+        if (tryStartHandleGesture(hit, scenePos)) {
+            m_drawing = false;
+            qInfo() << "AnnotateWindow: select press handle on hit";
+            return false;
+        }
         if (auto *photo = qgraphicsitem_cast<AnnotatePhotoItem *>(hit)) {
-            const SelectHandle handle = hitSelectHandle(photo, scenePos);
-            if (handle != SelectHandle::None && handle != SelectHandle::Move) {
-                ++m_photoScaleGestureId;
-                m_scalingPhoto = photo;
-                m_photoScaleHandle = handle;
-                m_photoOldScale = photo->photoScale();
-                m_photoOldPos = photo->pos();
-                m_resizeStart = scenePos;
-                qInfo() << "AnnotateWindow: select photo scale start" << m_photoOldScale
-                        << "handle=" << static_cast<int>(handle);
-                return false;
-            }
             ++m_photoMoveGestureId;
             m_movingPhoto = photo;
             m_photoOldPos = photo->pos();
@@ -3542,10 +3640,7 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
             m_selectPressScene = scenePos;
             m_selectOldPos = hit->pos();
             m_selectDidMove = false;
-            m_selectHandle = hitSelectHandle(hit, scenePos);
-            if (m_selectHandle == SelectHandle::None) {
-                m_selectHandle = SelectHandle::Move;
-            }
+            m_selectHandle = SelectHandle::Move;
             if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(hit)) {
                 m_selectOldRect = rect->rect();
             }
@@ -3584,18 +3679,16 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
         beginEditText(text, false);
         return true;
     }
+    if (auto *selectedPhoto = qgraphicsitem_cast<AnnotatePhotoItem *>(selectedAnnotation())) {
+        if (tryStartHandleGesture(selectedPhoto, scenePos)) {
+            qInfo() << "AnnotateWindow: photo scale handle on selected";
+            return false;
+        }
+    }
     if (auto *photo = photoItemAt(scenePos)) {
         commitTextEdit();
-        const SelectHandle handle = hitSelectHandle(photo, scenePos);
-        if (handle != SelectHandle::None && handle != SelectHandle::Move) {
-            ++m_photoScaleGestureId;
-            m_scalingPhoto = photo;
-            m_photoScaleHandle = handle;
-            m_photoOldScale = photo->photoScale();
-            m_photoOldPos = photo->pos();
-            m_resizeStart = scenePos;
-            qInfo() << "AnnotateWindow: photo scale start" << m_photoOldScale
-                    << "handle=" << static_cast<int>(handle) << "gesture=" << m_photoScaleGestureId;
+        if (tryStartHandleGesture(photo, scenePos)) {
+            qInfo() << "AnnotateWindow: photo scale handle on hit";
             return false;
         }
         ++m_photoMoveGestureId;
@@ -3610,28 +3703,19 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
         return true;
     }
     if (m_tool == Tool::Highlight || m_tool == Tool::Blur) {
-        QGraphicsItem *hit = annotationItemAt(scenePos);
         const AnnotateKind want =
             (m_tool == Tool::Highlight) ? AnnotateKind::Highlight : AnnotateKind::Blur;
+        QGraphicsItem *selected = selectedAnnotation();
+        if (selected && annotateKind(selected) == want && tryStartHandleGesture(selected, scenePos)) {
+            m_drawing = false;
+            qInfo() << "AnnotateWindow: square handle on selected kind=" << static_cast<int>(want);
+            return false;
+        }
+        QGraphicsItem *hit = annotationItemAt(scenePos);
         if (hit && annotateKind(hit) == want) {
-            const SelectHandle handle = hitSelectHandle(hit, scenePos);
-            if (handle != SelectHandle::None && handle != SelectHandle::Move) {
-                selectAnnotation(hit);
-                m_selectItem = hit;
-                m_selectPressScene = scenePos;
-                m_selectOldPos = hit->pos();
-                m_selectDidMove = false;
-                m_selectHandle = handle;
-                if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(hit)) {
-                    m_selectOldRect = rect->rect();
-                }
-                if (auto *pix = qgraphicsitem_cast<QGraphicsPixmapItem *>(hit)) {
-                    m_selectOldBlurPos = pix->pos();
-                    m_selectOldBlurSource = pix->data(kAnnotateRoleBlurSource).value<QImage>();
-                }
+            if (tryStartHandleGesture(hit, scenePos)) {
                 m_drawing = false;
-                qInfo() << "AnnotateWindow: square edge resize handle=" << static_cast<int>(handle)
-                        << "kind=" << static_cast<int>(want);
+                qInfo() << "AnnotateWindow: square handle on hit kind=" << static_cast<int>(want);
                 return false;
             }
             qInfo() << "AnnotateWindow: square press interior, new draft kind=" << static_cast<int>(want);

@@ -58,6 +58,7 @@ private:
     QPointer<RegionPicker> m_picker;
     QPointer<AnnotateWindow> m_editor;
     QPointer<SettingsWindow> m_settings;
+    QPointer<FirstRunWizard> m_onboarding;
     bool m_capturing = false;
     bool m_requestedScreenRecording = false;
     bool m_ensuringScreenRecording = false;

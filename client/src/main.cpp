@@ -1,6 +1,7 @@
 #include "app/Analytics.h"
 #include "app/Application.h"
 #include "app/Logger.h"
+#include "local/LocalStore.h"
 #include "update/SparkleUpdater.h"
 
 #include <QApplication>
@@ -18,7 +19,7 @@ int main(int argc, char *argv[])
 {
     QApplication::setApplicationName(QStringLiteral("SeenShot"));
     QApplication::setOrganizationName(QStringLiteral("SeenShot"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.4"));
+    QApplication::setApplicationVersion(QStringLiteral("0.1.5"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     const QString icns = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Resources/SeenShot.icns"));
@@ -27,6 +28,16 @@ int main(int argc, char *argv[])
     Logger::install();
     qInfo() << "main: SeenShot starting Qt" << QT_VERSION_STR
             << "iconNull=" << appIcon.isNull() << "icns=" << icns;
+    // ─── Ariadne's Thread [AT-0304] ─────────────────────
+    // What: Honor --reset-onboarding before Application::start
+    // Why:  Developer can re-run the 6-step wizard without wiping account or hotkeys
+    // Date: 2026-08-28
+    // Related: [AT-0301] LocalStore.cpp:resetOnboarding, [AT-0303] Application.cpp:start
+    // ─────────────────────────────────────────────────────
+    if (app.arguments().contains(QStringLiteral("--reset-onboarding"))) {
+        qInfo() << "main: --reset-onboarding args=" << app.arguments().size();
+        LocalStore::resetOnboarding();
+    }
     Analytics::instance().start();
     SparkleUpdater::start();
     Application seenshot;

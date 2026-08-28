@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SeenShot VERSION 0.1.4 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 0.1.5 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,8 +65,16 @@ set(SEENSHOT_SOURCES
 # Related: [AT-0124] packaging/macos/Info.plist, packaging/macos/SeenShot.icns
 # ─────────────────────────────────────────────────────
 set(SEENSHOT_ICNS ${CMAKE_SOURCE_DIR}/packaging/macos/SeenShot.icns)
+# ─── Ariadne's Thread [AT-0307] ─────────────────────
+# What: Bundle screen-recording-toggle.png in Resources
+# Why:  Onboarding Screen Recording page shows the System Settings row, not a second dialog
+# Date: 2026-08-28
+# Related: [AT-0307] FirstRunWizard.cpp:ScreenRecordingPage
+# ─────────────────────────────────────────────────────
+set(SEENSHOT_SCREEN_REC ${CMAKE_SOURCE_DIR}/packaging/macos/screen-recording-toggle.png)
 set_source_files_properties(${SEENSHOT_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS})
+set_source_files_properties(${SEENSHOT_SCREEN_REC} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS} ${SEENSHOT_SCREEN_REC})
 
 set_source_files_properties(
     client/src/camera/CameraCapture.mm

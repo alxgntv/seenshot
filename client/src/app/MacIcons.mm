@@ -101,3 +101,73 @@ QIcon macToolbarIcon(const QString &symbolName, const QColor &tint)
             << "dpr=" << pix.devicePixelRatio() << "dest=" << dest.size.width << "x" << dest.size.height;
     return QIcon(pix);
 }
+
+// ─── Ariadne's Thread [AT-0305] ─────────────────────
+// What: Rasterize NSWorkspace iconForFile of the running .app
+// Why:  QIcon does not load SeenShot.icns; Welcome page needs the bundle mark
+// Date: 2026-08-28
+// Related: [AT-0302] FirstRunWizard.cpp, [AT-0055] MacIcons.mm:macToolbarIcon
+// ─────────────────────────────────────────────────────
+QPixmap macBundleIcon(int pointSize)
+{
+    if (pointSize < 1) {
+        qWarning() << "macBundleIcon: invalid pointSize=" << pointSize;
+        return {};
+    }
+    NSString *path = [NSBundle mainBundle].bundlePath ?: @"";
+    NSImage *image = [[NSWorkspace sharedWorkspace] iconForFile:path];
+    if (!image) {
+        qWarning() << "macBundleIcon: iconForFile nil path=" << QString::fromNSString(path);
+        return {};
+    }
+    const CGFloat scale = [NSScreen mainScreen] ? [NSScreen mainScreen].backingScaleFactor : 1.0;
+    const NSInteger px = (NSInteger)llround((CGFloat)pointSize * (scale > 0 ? scale : 1.0));
+    qInfo() << "macBundleIcon: rasterize pointSize=" << pointSize << " px=" << static_cast<int>(px)
+            << " scale=" << scale << " path=" << QString::fromNSString(path);
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:nil
+                      pixelsWide:px
+                      pixelsHigh:px
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSDeviceRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0];
+    if (!rep) {
+        qWarning() << "macBundleIcon: NSBitmapImageRep failed";
+        return {};
+    }
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext *gc = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!gc) {
+        [NSGraphicsContext restoreGraphicsState];
+        qWarning() << "macBundleIcon: graphics context failed";
+        return {};
+    }
+    [NSGraphicsContext setCurrentContext:gc];
+    const NSRect canvas = NSMakeRect(0, 0, px, px);
+    [[NSColor clearColor] set];
+    NSRectFill(canvas);
+    [image drawInRect:canvas
+              fromRect:NSZeroRect
+             operation:NSCompositingOperationSourceOver
+              fraction:1.0
+        respectFlipped:YES
+                 hints:nil];
+    [NSGraphicsContext restoreGraphicsState];
+    NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!png) {
+        qWarning() << "macBundleIcon: PNG encode failed";
+        return {};
+    }
+    QPixmap pix;
+    if (!pix.loadFromData(QByteArray::fromNSData(png), "PNG")) {
+        qWarning() << "macBundleIcon: PNG load failed bytes=" << static_cast<int>(png.length);
+        return {};
+    }
+    pix.setDevicePixelRatio(scale > 0 ? scale : 1.0);
+    qInfo() << "macBundleIcon: loaded size=" << pix.size() << " dpr=" << pix.devicePixelRatio();
+    return pix;
+}

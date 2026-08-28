@@ -72,6 +72,8 @@ Application::~Application()
 void Application::start()
 {
     qInfo() << "Application: start firstRun=" << !LocalStore::firstRunCompleted()
+            << " onboardingVersion=" << LocalStore::onboardingVersion()
+            << " onboardingDone=" << LocalStore::onboardingCompleted()
             << " path=" << MacPermissions::runningAppPath();
     qApp->setQuitOnLastWindowClosed(false);
     qApp->installEventFilter(this);
@@ -82,17 +84,45 @@ void Application::start()
     MacUrlHandler::install([this](const QUrl &url) {
         handleOpenUrl(url);
     });
-    if (!LocalStore::firstRunCompleted()) {
+    bool captureAfterWizard = false;
+    // ─── Ariadne's Thread [AT-0303] ─────────────────────
+    // What: Run 6-step FirstRunWizard when onboardingVersion < 1; Dock Regular then Accessory
+    // Why:  firstRunCompleted must not skip setup; Take screenshot Finish starts path capture
+    // Date: 2026-08-28
+    // Related: [AT-0302] FirstRunWizard.cpp, [AT-0300] MacPermissions.mm:setDockVisible
+    // ─────────────────────────────────────────────────────
+    if (!LocalStore::onboardingCompleted()) {
         FirstRunWizard wizard;
-        if (wizard.exec() == QDialog::Accepted) {
-            LocalStore::setHotkeySpec(wizard.selectedHotkey());
-            LocalStore::setFirstRunCompleted();
+        m_onboarding = &wizard;
+        const bool dockOn = MacPermissions::setDockVisible(true);
+        qInfo() << "Application: onboarding dockOn=" << dockOn;
+        MacPermissions::activateApp();
+        wizard.show();
+        wizard.raise();
+        wizard.activateWindow();
+        const int result = wizard.exec();
+        m_onboarding = nullptr;
+        const bool accepted = result == QDialog::Accepted;
+        qInfo() << "Application: onboarding result=" << result << " accepted=" << accepted;
+        const bool dockOff = MacPermissions::setDockVisible(false);
+        qInfo() << "Application: onboarding dockOff=" << dockOff;
+        if (accepted) {
+            LocalStore::setOnboardingCompleted();
+            captureAfterWizard = true;
         } else {
-            LocalStore::setFirstRunCompleted();
+            qInfo() << "Application: onboarding dismissed, will show again next launch";
         }
     }
     applyHotkeys();
     m_tray->show();
+    if (captureAfterWizard) {
+        if (LocalStore::hasEditorSession()) {
+            qInfo() << "Application: skip first capture, persisted editor exists";
+        } else {
+            qInfo() << "Application: first capture after onboarding Finish";
+            beginCapture();
+        }
+    }
     restoreEditorIfNeeded();
 }
 
@@ -248,6 +278,14 @@ void Application::showScreenRecordingHelp()
 // ─────────────────────────────────────────────────────
 bool Application::eventFilter(QObject *watched, QEvent *event)
 {
+    if (m_onboarding && event->type() == QEvent::ApplicationStateChange
+        && QGuiApplication::applicationState() == Qt::ApplicationActive
+        && !m_onboarding->isActiveWindow()) {
+        qInfo() << "Application: raise onboarding from Dock active=" << m_onboarding->isActiveWindow();
+        MacPermissions::activateApp();
+        m_onboarding->raise();
+        m_onboarding->activateWindow();
+    }
     if (watched == qApp && event->type() == QEvent::Quit) {
         const bool accept = MacPermissions::shouldAcceptApplicationQuit();
         qInfo() << "Application: Quit event accept=" << accept

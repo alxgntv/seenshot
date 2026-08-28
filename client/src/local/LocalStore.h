@@ -19,6 +19,16 @@ public:
     static void removeTempCapture(const QString &path);
     static bool firstRunCompleted();
     static void setFirstRunCompleted();
+    // ─── Ariadne's Thread [AT-0301] ─────────────────────
+    // What: Gate first-run on onboardingVersion, not firstRunCompleted
+    // Why:  0.1.4 already set firstRunCompleted; everyone must still pass the 6-step wizard
+    // Date: 2026-08-28
+    // Related: [AT-0303] Application.cpp:start, [AT-0302] FirstRunWizard.cpp
+    // ─────────────────────────────────────────────────────
+    static int onboardingVersion();
+    static bool onboardingCompleted();
+    static void setOnboardingCompleted();
+    static void resetOnboarding();
     // ─── Ariadne's Thread [AT-0175] ─────────────────────
     // What: Persist that this Mac already registered SeenShot with Screen Recording TCC
     // Why:  CGRequestScreenCaptureAccess every launch showed Open Settings while another signed copy was already on

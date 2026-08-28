@@ -67,6 +67,45 @@ void LocalStore::setFirstRunCompleted()
     qInfo() << "LocalStore: first run marked complete";
 }
 
+// ─── Ariadne's Thread [AT-0301] ─────────────────────
+// What: Persist onboardingVersion=1 when the 6-step QWizard finishes
+// Why:  firstRunCompleted is already true on 0.1.4 installs; that must not skip setup
+// Date: 2026-08-28
+// Related: [AT-0303] Application.cpp:start, [AT-0304] main.cpp
+// ─────────────────────────────────────────────────────
+int LocalStore::onboardingVersion()
+{
+    QSettings settings;
+    const int version = settings.value(QStringLiteral("onboardingVersion"), 0).toInt();
+    qInfo() << "LocalStore: onboardingVersion=" << version;
+    return version;
+}
+
+bool LocalStore::onboardingCompleted()
+{
+    const int version = onboardingVersion();
+    const bool done = version >= 1;
+    qInfo() << "LocalStore: onboardingCompleted=" << done;
+    return done;
+}
+
+void LocalStore::setOnboardingCompleted()
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("onboardingVersion"), 1);
+    settings.setValue(QStringLiteral("firstRunCompleted"), true);
+    settings.sync();
+    qInfo() << "LocalStore: onboardingVersion=1 firstRunCompleted=true";
+}
+
+void LocalStore::resetOnboarding()
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("onboardingVersion"), 0);
+    settings.sync();
+    qInfo() << "LocalStore: onboardingVersion reset to 0";
+}
+
 // ─── Ariadne's Thread [AT-0175] ─────────────────────
 // What: Persist that this Mac already registered SeenShot with Screen Recording TCC
 // Why:  CGRequestScreenCaptureAccess every launch showed Open Settings while another signed copy was already on

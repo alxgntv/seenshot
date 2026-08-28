@@ -9,6 +9,13 @@ class QWidget;
 class MacPermissions {
 public:
     static void activateApp();
+    // ─── Ariadne's Thread [AT-0300] ─────────────────────
+    // What: Toggle NSApplicationActivationPolicy Regular vs Accessory
+    // Why:  Dock icon only while first-run QWizard is open; LSUIElement stays in Info.plist
+    // Date: 2026-08-28
+    // Related: [AT-0303] Application.cpp:start, [AT-0302] FirstRunWizard.cpp
+    // ─────────────────────────────────────────────────────
+    static bool setDockVisible(bool visible);
     // ─── Ariadne's Thread [AT-0209] ─────────────────────
     // What: Open http(s) URLs in the default browser via NSWorkspace
     // Why:  Share must land on /screenshot/{id} in the same browser as website OAuth
