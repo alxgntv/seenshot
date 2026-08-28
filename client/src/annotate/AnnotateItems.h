@@ -94,8 +94,14 @@ public:
     void setTextOutline(bool on);
     bool textOutline() const;
     void applyTextStyle();
+    QRectF boundingRect() const override;
+
+protected:
+    void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
 
 private:
+    qreal stickerStrokeWidth() const;
+    QPainterPath stickerGlyphPath() const;
     int m_textSize = 18;
     bool m_textOutline = false;
 };

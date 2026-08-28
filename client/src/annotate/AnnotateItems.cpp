@@ -1,14 +1,18 @@
 #include "annotate/AnnotateItems.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QBrush>
 #include <QDebug>
 #include <QVariant>
 #include <QFont>
 #include <QFontMetrics>
 #include <QLineF>
+#include <QTextBlock>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextLayout>
+#include <QTextLine>
 #include <QTextOption>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
@@ -652,10 +656,25 @@ void AnnotateTextItem::beginEdit()
 
 void AnnotateTextItem::endEdit()
 {
+    // ─── Ariadne's Thread [AT-0314] ─────────────────────
+    // What: Clear QTextCursor selection when leaving in-place edit
+    // Why:  NoTextInteraction still painted the gray selection on the old block
+    // Date: 2026-08-28
+    // Related: [AT-0040] AnnotateItems.h:AnnotateTextItem, [AT-0111] AnnotateWindow.cpp:commitTextEdit
+    // ─────────────────────────────────────────────────────
+    QTextCursor cursor = textCursor();
+    const bool hadSelection = cursor.hasSelection();
+    const int selStart = cursor.selectionStart();
+    const int selEnd = cursor.selectionEnd();
+    cursor.clearSelection();
+    cursor.movePosition(QTextCursor::End);
+    setTextCursor(cursor);
     setTextInteractionFlags(Qt::NoTextInteraction);
     clearFocus();
+    update();
     qInfo() << "AnnotateTextItem: endEdit text=" << toPlainText()
-            << "no wrap grip paint, width=" << textWidth();
+            << "hadSelection=" << hadSelection << "selStart=" << selStart << "selEnd=" << selEnd
+            << "width=" << textWidth();
 }
 
 void AnnotateTextItem::setTextSize(int size)
@@ -682,15 +701,83 @@ void AnnotateTextItem::setTextOutline(bool on)
         qInfo() << "AnnotateTextItem: setTextOutline unchanged=" << on;
         return;
     }
+    prepareGeometryChange();
     m_textOutline = on;
     setData(kAnnotateRoleTextOutline, m_textOutline);
     applyTextStyle();
-    qInfo() << "AnnotateTextItem: setTextOutline=" << m_textOutline;
+    qInfo() << "AnnotateTextItem: setTextOutline=" << m_textOutline
+            << "stroke=" << stickerStrokeWidth();
 }
 
 bool AnnotateTextItem::textOutline() const
 {
     return m_textOutline;
+}
+
+qreal AnnotateTextItem::stickerStrokeWidth() const
+{
+    return qMax(4.0, static_cast<qreal>(m_textSize) * 0.32);
+}
+
+QPainterPath AnnotateTextItem::stickerGlyphPath() const
+{
+    QPainterPath path;
+    QTextDocument *doc = document();
+    if (!doc) {
+        qWarning() << "AnnotateTextItem: stickerGlyphPath no document";
+        return path;
+    }
+    QAbstractTextDocumentLayout *layout = doc->documentLayout();
+    if (!layout) {
+        qWarning() << "AnnotateTextItem: stickerGlyphPath no layout";
+        return path;
+    }
+    const QFont f = font();
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        QTextLayout *textLayout = block.layout();
+        if (!textLayout) {
+            continue;
+        }
+        const QRectF blockRect = layout->blockBoundingRect(block);
+        const int lineCount = textLayout->lineCount();
+        for (int i = 0; i < lineCount; ++i) {
+            const QTextLine line = textLayout->lineAt(i);
+            QString slice = block.text().mid(line.textStart(), line.textLength());
+            slice.remove(QLatin1Char('\n'));
+            slice.remove(QLatin1Char('\r'));
+            if (slice.isEmpty()) {
+                continue;
+            }
+            const QPointF baseline(blockRect.left() + line.x(),
+                                   blockRect.top() + line.y() + line.ascent());
+            path.addText(baseline, f, slice);
+        }
+    }
+    return path;
+}
+
+QRectF AnnotateTextItem::boundingRect() const
+{
+    QRectF box = QGraphicsTextItem::boundingRect();
+    if (m_textOutline) {
+        const qreal pad = stickerStrokeWidth() * 0.5 + 1.0;
+        box.adjust(-pad, -pad, pad, pad);
+    }
+    return box;
+}
+
+void AnnotateTextItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+{
+    if (m_textOutline && painter) {
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const QPainterPath glyphs = stickerGlyphPath();
+        if (!glyphs.isEmpty()) {
+            const qreal width = stickerStrokeWidth();
+            QPen pen(contrastInk(defaultTextColor()), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            painter->strokePath(glyphs, pen);
+        }
+    }
+    QGraphicsTextItem::paint(painter, option, widget);
 }
 
 // ─── Ariadne's Thread [AT-0148] ─────────────────────
@@ -699,8 +786,17 @@ bool AnnotateTextItem::textOutline() const
 // Date: 2026-08-26
 // Related: [AT-0113] AnnotationCommands.cpp:applyTextItemColor, [AT-0040] AnnotateItems.h
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0313] ─────────────────────
+// What: Drop QTextCharFormat outline; sticker halo is stroke-under-fill in paint
+// Why:  Qt text outline stroked each glyph inward and did not merge into one blob
+// Date: 2026-08-28
+// Related: [AT-0148] AnnotateItems.cpp:applyTextStyle, [AT-0040] AnnotateItems.h:AnnotateTextItem
+// ─────────────────────────────────────────────────────
 void AnnotateTextItem::applyTextStyle()
 {
+    if (m_textOutline) {
+        prepareGeometryChange();
+    }
     QFont next = font();
     next.setPixelSize(m_textSize);
     setFont(next);
@@ -713,11 +809,7 @@ void AnnotateTextItem::applyTextStyle()
     QTextCharFormat fmt;
     fmt.setFont(next);
     fmt.setForeground(QBrush(defaultTextColor()));
-    if (m_textOutline) {
-        fmt.setTextOutline(QPen(contrastInk(defaultTextColor()), 2));
-    } else {
-        fmt.setTextOutline(QPen(Qt::NoPen));
-    }
+    fmt.setTextOutline(QPen(Qt::NoPen));
     if (doc) {
         QTextCursor all(doc);
         all.select(QTextCursor::Document);
@@ -727,8 +819,9 @@ void AnnotateTextItem::applyTextStyle()
     if (doc) {
         doc->setUndoRedoEnabled(undoOn);
     }
+    update();
     qInfo() << "AnnotateTextItem: applyTextStyle size=" << m_textSize << "outline=" << m_textOutline
-            << "color=" << defaultTextColor();
+            << "color=" << defaultTextColor() << "stroke=" << stickerStrokeWidth();
 }
 
 // ─── Ariadne's Thread [AT-0160] ─────────────────────
@@ -852,7 +945,9 @@ void StepBadgeItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     QPainterPath path;
     path.addText(QPointF(x, y), font, label);
     if (m_textOutline) {
-        painter->strokePath(path, QPen(contrastInk(m_ink), 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const qreal width = qMax(4.0, static_cast<qreal>(m_digitSize) * 0.32);
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->strokePath(path, QPen(contrastInk(m_ink), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     }
     painter->fillPath(path, m_ink);
 }

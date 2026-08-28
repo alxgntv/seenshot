@@ -1356,6 +1356,46 @@ void AnnotateWindow::showError(const QString &code)
     QMessageBox::warning(this, QStringLiteral("SeenShot"), ErrorCatalog::message(code));
 }
 
+// ─── Ariadne's Thread [AT-0312] ─────────────────────
+// What: Quota eviction dialog: Upgrade opens Polar checkout
+// Why:  OK hid the upgrade path after Free 10 MB eviction
+// Date: 2026-08-28
+// Related: [AT-0002] ErrorCatalog.cpp:QUOTA_EVICTED, [AT-0276] CloudClient.cpp:createCheckoutUrl
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::showQuotaEvicted()
+{
+    QMessageBox box(this);
+    box.setWindowTitle(QStringLiteral("SeenShot"));
+    box.setIcon(QMessageBox::Information);
+    box.setText(ErrorCatalog::message(QStringLiteral("QUOTA_EVICTED")));
+    QPushButton *upgrade = box.addButton(QStringLiteral("Upgrade"), QMessageBox::AcceptRole);
+    box.setDefaultButton(upgrade);
+    qInfo() << "AnnotateWindow: quota evicted dialog";
+    box.exec();
+    if (box.clickedButton() != upgrade) {
+        qInfo() << "AnnotateWindow: quota evicted dialog dismissed without Upgrade";
+        return;
+    }
+    if (!m_cloud) {
+        qWarning() << "AnnotateWindow: quota Upgrade missing CloudClient";
+        showError(QStringLiteral("UNKNOWN_ERROR"));
+        return;
+    }
+    QString url;
+    QString error;
+    if (!m_cloud->createCheckoutUrl(&url, &error)) {
+        qWarning() << "AnnotateWindow: quota Upgrade checkout failed code=" << error << " urlEmpty=" << url.isEmpty();
+        showError(error.isEmpty() ? QStringLiteral("UNKNOWN_ERROR") : error);
+        return;
+    }
+    const QUrl checkout(url);
+    qInfo() << "AnnotateWindow: quota Upgrade checkout urlChars=" << url.size() << " host=" << checkout.host();
+    if (!MacPermissions::openDefaultBrowser(checkout)) {
+        qWarning() << "AnnotateWindow: quota Upgrade open browser failed host=" << checkout.host();
+        showError(QStringLiteral("UNKNOWN_ERROR"));
+    }
+}
+
 bool AnnotateWindow::ensureOnlineSignedIn(QString *errorCode)
 {
     if (!m_auth || !m_auth->hasSession()) {
@@ -1545,7 +1585,8 @@ void AnnotateWindow::share()
     }
     setShareBusy(false);
     if (!result.evictedIds.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("SeenShot"), ErrorCatalog::message(QStringLiteral("QUOTA_EVICTED")));
+        qInfo() << "AnnotateWindow: share evicted count=" << result.evictedIds.size();
+        showQuotaEvicted();
     }
     qInfo() << "AnnotateWindow: published" << url << " fileId=" << m_fileId << " cloudShotId=" << m_cloudShotId;
     Analytics::instance().track(QStringLiteral("share"));

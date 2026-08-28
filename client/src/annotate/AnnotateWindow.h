@@ -216,6 +216,7 @@ private:
     bool hasBackground() const;
     qreal maxTextWidthOnShot(const AnnotateTextItem *item) const;
     void showError(const QString &code);
+    void showQuotaEvicted();
     bool ensureOnlineSignedIn(QString *errorCode);
     void setShareBusy(bool busy);
     void setShareProgress(qint64 sent, qint64 total);

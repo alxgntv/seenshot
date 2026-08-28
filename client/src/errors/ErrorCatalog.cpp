@@ -37,7 +37,7 @@ QString ErrorCatalog::message(const QString &code)
         {QStringLiteral("PUBLISH_FAILED"),
          QStringLiteral("Could not publish this screenshot. Try again in a moment.")},
         {QStringLiteral("QUOTA_EVICTED"),
-         QStringLiteral("Oldest cloud screenshots were removed to free 10 MB.")},
+         QStringLiteral("You have reached the free space limit for screenshots, 10 MB for Free accounts. Old screenshots were removed.")},
         {QStringLiteral("PRO_GRACE_ENDED"),
          QStringLiteral("Pro ended. Cloud screenshots were removed. Local files are kept.")},
         {QStringLiteral("ACCOUNT_DELETED"),
