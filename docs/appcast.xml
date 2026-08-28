@@ -3,6 +3,14 @@
     <channel>
         <title>SeenShot</title>
         <item>
+            <title>0.1.5</title>
+            <pubDate>Fri, 28 Aug 2026 10:40:04 +0300</pubDate>
+            <sparkle:version>0.1.5</sparkle:version>
+            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/alxgntv/seenshot/releases/download/v0.1.5/SeenShot-0.1.5-arm64.dmg" length="37399728" type="application/octet-stream" sparkle:edSignature="gIuUkh2p7jALqUcQToc4DVnHDx66fEB1FWOpjDy5QOUZKt/eoIu6jTY0D9bHuQVUu6KuffAP99e392uxlvj1CA=="/>
+        </item>
+        <item>
             <title>0.1.4</title>
             <pubDate>Thu, 27 Aug 2026 21:19:11 +0300</pubDate>
             <sparkle:version>0.1.4</sparkle:version>
