@@ -1,0 +1,44 @@
+#!/bin/sh
+# ─── Ariadne's Thread [AT-0322] ─────────────────────
+# What: After pkg payload is laid down, open SeenShot as the console user
+# Why:  Installer scripts run as root; first-run QWizard must start in the GUI session
+# Date: 2026-08-28
+# Related: [AT-0321] Application.cpp:finishLaunch, pkgbuild(1)
+# ─────────────────────────────────────────────────────
+# pkgbuild passes: $1 package path, $2 install location, $3 destination volume
+set -eu
+
+echo "SeenShot postinstall: start pkg=$1 dest=$2 volume=$3"
+
+APP=""
+if [ -d "${2}/SeenShot.app" ]; then
+  APP="${2}/SeenShot.app"
+elif [ -d "/Applications/SeenShot.app" ]; then
+  APP="/Applications/SeenShot.app"
+elif [ -n "${3:-}" ] && [ -d "${3}/Applications/SeenShot.app" ]; then
+  APP="${3}/Applications/SeenShot.app"
+fi
+
+if [ -z "${APP}" ] || [ ! -d "${APP}" ]; then
+  echo "SeenShot postinstall: ERROR SeenShot.app missing dest=$2 volume=${3:-}"
+  exit 0
+fi
+
+CONSOLE_USER="$(/usr/bin/stat -f%Su /dev/console)"
+CONSOLE_UID="$(/usr/bin/id -u "${CONSOLE_USER}" 2>/dev/null || echo 0)"
+echo "SeenShot postinstall: app=${APP} consoleUser=${CONSOLE_USER} consoleUid=${CONSOLE_UID}"
+
+if [ -z "${CONSOLE_USER}" ] || [ "${CONSOLE_USER}" = "root" ] || [ "${CONSOLE_UID}" = "0" ]; then
+  echo "SeenShot postinstall: skip open, no GUI user"
+  exit 0
+fi
+
+/usr/bin/killall SeenShot 2>/dev/null || true
+
+if /bin/launchctl asuser "${CONSOLE_UID}" /usr/bin/sudo -u "${CONSOLE_USER}" /usr/bin/open "${APP}"; then
+  echo "SeenShot postinstall: opened ${APP} as ${CONSOLE_USER}"
+else
+  echo "SeenShot postinstall: ERROR open failed app=${APP} user=${CONSOLE_USER}"
+fi
+
+exit 0

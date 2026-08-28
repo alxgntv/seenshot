@@ -32,6 +32,7 @@
 #include <QJsonObject>
 #include <QPushButton>
 #include <QScreen>
+#include <QTimer>
 #include <QUrl>
 #include <QWidget>
 
@@ -84,6 +85,21 @@ void Application::start()
     MacUrlHandler::install([this](const QUrl &url) {
         handleOpenUrl(url);
     });
+    // ─── Ariadne's Thread [AT-0321] ─────────────────────
+    // What: Run onboarding on the next event-loop tick after start
+    // Why:  Installer/pkg `open` launches the agent before NSApp's run loop; QWizard.exec in start hid the setup
+    // Date: 2026-08-28
+    // Related: [AT-0303] Application.cpp:finishLaunch, [AT-0322] packaging/macos/pkg/scripts/postinstall
+    // ─────────────────────────────────────────────────────
+    qInfo() << "Application: schedule finishLaunch on event loop";
+    QTimer::singleShot(0, this, [this]() {
+        qInfo() << "Application: finishLaunch timer fired";
+        finishLaunch();
+    });
+}
+
+void Application::finishLaunch()
+{
     bool captureAfterWizard = false;
     // ─── Ariadne's Thread [AT-0303] ─────────────────────
     // What: Run 6-step FirstRunWizard when onboardingVersion < 1; Dock Regular then Accessory
@@ -112,6 +128,8 @@ void Application::start()
         } else {
             qInfo() << "Application: onboarding dismissed, will show again next launch";
         }
+    } else {
+        qInfo() << "Application: skip onboarding, already completed";
     }
     applyHotkeys();
     m_tray->show();
@@ -124,6 +142,7 @@ void Application::start()
         }
     }
     restoreEditorIfNeeded();
+    qInfo() << "Application: finishLaunch done captureAfterWizard=" << captureAfterWizard;
 }
 
 // ─── Ariadne's Thread [AT-0094] ─────────────────────
@@ -313,6 +332,12 @@ bool Application::eventFilter(QObject *watched, QEvent *event)
     return QObject::eventFilter(watched, event);
 }
 
+// ─── Ariadne's Thread [AT-0315] ─────────────────────
+// What: seenshot://oauth and email-link success do not open Settings
+// Why:  Settings was shown as a signed-in confirmation after the website sent the user back
+// Date: 2026-08-28
+// Related: [AT-0193] AuthSession.cpp:completeWebsiteCallback, [AT-0198] SettingsWindow.cpp:openSignIn
+// ─────────────────────────────────────────────────────
 void Application::handleOpenUrl(const QUrl &url)
 {
     qInfo() << "Application: handleOpenUrl scheme=" << url.scheme() << " host=" << url.host()
@@ -325,15 +350,14 @@ void Application::handleOpenUrl(const QUrl &url)
     if (dest == QLatin1String("oauth") || dest == QLatin1String("/oauth")) {
         QString error;
         const bool ok = m_auth->completeWebsiteCallback(url, &error);
-        qInfo() << "Application: oauth callback ok=" << ok << " error=" << error;
+        qInfo() << "Application: oauth callback ok=" << ok << " error=" << error
+                << " hasSession=" << m_auth->hasSession();
         if (!ok && !error.isEmpty() && error != QLatin1String("AUTH_OAUTH_DENIED")) {
             MacPermissions::activateApp();
             QMessageBox::warning(nullptr, QStringLiteral("SeenShot"), ErrorCatalog::message(error));
             return;
         }
-        if (m_auth->hasSession()) {
-            openSettings();
-        }
+        qInfo() << "Application: oauth callback done, skip Settings";
         return;
     }
     QString error;
@@ -343,8 +367,8 @@ void Application::handleOpenUrl(const QUrl &url)
         QMessageBox::warning(nullptr, QStringLiteral("SeenShot"), ErrorCatalog::message(error));
         return;
     }
-    qInfo() << "Application: email link finished hasSession=" << m_auth->hasSession();
-    openSettings();
+    qInfo() << "Application: email link finished hasSession=" << m_auth->hasSession()
+            << " skip Settings";
 }
 
 void Application::teardownNativeWindows()

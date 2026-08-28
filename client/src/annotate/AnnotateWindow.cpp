@@ -1481,7 +1481,14 @@ void AnnotateWindow::saveLocal()
     qInfo() << "AnnotateWindow: saved local path=" << path << " pngBytes=" << png.size()
             << " fileId=" << m_fileId;
     Analytics::instance().track(QStringLiteral("save"));
-    statusBar()->showMessage(QStringLiteral("Saved ") + path, 4000);
+    // ─── Ariadne's Thread [AT-0316] ─────────────────────
+    // What: Close the editor after a successful Save write
+    // Why:  The annotate window stayed open after the PNG was on disk
+    // Date: 2026-08-28
+    // Related: [AT-0202] AnnotateWindow.cpp:closeEvent, [AT-0317] AnnotateWindow.cpp:share
+    // ─────────────────────────────────────────────────────
+    qInfo() << "AnnotateWindow: close after local save path=" << path;
+    close();
 }
 
 // ─── Ariadne's Thread [AT-0057] ─────────────────────
@@ -1590,6 +1597,14 @@ void AnnotateWindow::share()
     }
     qInfo() << "AnnotateWindow: published" << url << " fileId=" << m_fileId << " cloudShotId=" << m_cloudShotId;
     Analytics::instance().track(QStringLiteral("share"));
+    // ─── Ariadne's Thread [AT-0317] ─────────────────────
+    // What: Close the editor after Share publish succeeds
+    // Why:  The annotate window stayed open after the public page was already open
+    // Date: 2026-08-28
+    // Related: [AT-0316] AnnotateWindow.cpp:saveLocal, [AT-0202] AnnotateWindow.cpp:closeEvent
+    // ─────────────────────────────────────────────────────
+    qInfo() << "AnnotateWindow: close after share fileId=" << m_fileId << " cloudShotId=" << m_cloudShotId;
+    close();
 }
 
 void AnnotateWindow::onWebsiteSignInSettled(const QString &errorCode)

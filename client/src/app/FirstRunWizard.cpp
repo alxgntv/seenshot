@@ -64,7 +64,7 @@ public:
         if (kind == FullScreen) {
             setTitle(QStringLiteral("Full Screen Shot"));
         } else {
-            setTitle(QStringLiteral("Path Screen Shot"));
+            setTitle(QStringLiteral("Path"));
         }
         auto *layout = new QVBoxLayout(this);
         // ─── Ariadne's Thread [AT-0306] ─────────────────────
@@ -75,7 +75,7 @@ public:
         // ─────────────────────────────────────────────────────
         auto *prompt = new QLabel(
             kind == FullScreen ? QStringLiteral("Choose the shortcut for a full-screen capture.")
-                               : QStringLiteral("Choose the shortcut for a region capture."),
+                               : QStringLiteral("Choose the shortcut for Path."),
             this);
         prompt->setWordWrap(true);
         layout->addWidget(prompt);
@@ -333,12 +333,12 @@ public:
         const QString fullLabel = LocalStore::nativeHotkeyLabel(full);
         const QString pathLabel = LocalStore::nativeHotkeyLabel(path);
         m_body->setText(QStringLiteral("You're ready.\n\n"
-                                     "Full Screen Shot: %1\n"
-                                     "Path Screen Shot: %2\n\n"
+                                     "Path: %1\n"
+                                     "Full Screen Shot: %2\n\n"
                                      "Take your first screenshot.")
-                           .arg(fullLabel, pathLabel));
-        qInfo() << "FirstRunWizard: ReadyPage full=" << full << " path=" << path
-                << " fullLabel=" << fullLabel << " pathLabel=" << pathLabel;
+                           .arg(pathLabel, fullLabel));
+        qInfo() << "FirstRunWizard: ReadyPage path=" << path << " full=" << full
+                << " pathLabel=" << pathLabel << " fullLabel=" << fullLabel;
     }
 
 private:
@@ -356,12 +356,19 @@ FirstRunWizard::FirstRunWizard(QWidget *parent)
     setOption(QWizard::NoBackButtonOnStartPage, true);
     setButtonText(QWizard::FinishButton, QStringLiteral("Take screenshot"));
     addPage(new WelcomePage(this));
-    addPage(new HotkeyPage(HotkeyPage::FullScreen, this));
+    // ─── Ariadne's Thread [AT-0318] ─────────────────────
+    // What: Path hotkey page before Full Screen Shot; Path is the UI name
+    // Why:  Partial capture is Path and must be first in setup
+    // Date: 2026-08-28
+    // Related: [AT-0302] FirstRunWizard.cpp:HotkeyPage, [AT-0319] SettingsWindow.cpp
+    // ─────────────────────────────────────────────────────
     addPage(new HotkeyPage(HotkeyPage::Path, this));
+    addPage(new HotkeyPage(HotkeyPage::FullScreen, this));
     addPage(new ScreenRecordingPage(this));
     addPage(new LoginItemPage(this));
     addPage(new ReadyPage(this));
     setMinimumWidth(640);
     qInfo() << "FirstRunWizard: opened pages=" << pageIds().size()
-            << " WA_QuitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
+            << " WA_QuitOnClose=" << testAttribute(Qt::WA_QuitOnClose)
+            << " hotkeyOrder=path,full";
 }

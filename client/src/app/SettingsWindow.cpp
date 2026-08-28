@@ -70,8 +70,15 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     m_pathHotkey->setFocusPolicy(Qt::ClickFocus);
     m_fullScreenHotkey->setAttribute(Qt::WA_MacShowFocusRect, true);
     m_pathHotkey->setAttribute(Qt::WA_MacShowFocusRect, true);
+    // ─── Ariadne's Thread [AT-0319] ─────────────────────
+    // What: Capture rows are Path then Full Screen Shot; Path is the UI name
+    // Why:  Partial capture is Path everywhere, not Path Screen Shot
+    // Date: 2026-08-28
+    // Related: [AT-0318] FirstRunWizard.cpp, [AT-0320] TrayController.cpp
+    // ─────────────────────────────────────────────────────
+    captureForm->addRow(QStringLiteral("Path"), m_pathHotkey);
     captureForm->addRow(QStringLiteral("Full Screen Shot"), m_fullScreenHotkey);
-    captureForm->addRow(QStringLiteral("Path Screen Shot"), m_pathHotkey);
+    qInfo() << "SettingsWindow: capture rows Path then Full Screen Shot";
     m_launchAtLogin = new QCheckBox(QStringLiteral("Open SeenShot at login"), capture);
     captureForm->addRow(QString(), m_launchAtLogin);
     connect(m_fullScreenHotkey, &QKeySequenceEdit::editingFinished, this, &SettingsWindow::applyHotkeys);

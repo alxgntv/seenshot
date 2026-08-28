@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
 {
     QApplication::setApplicationName(QStringLiteral("SeenShot"));
     QApplication::setOrganizationName(QStringLiteral("SeenShot"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.6"));
+    QApplication::setApplicationVersion(QStringLiteral("0.1.7"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     const QString icns = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Resources/SeenShot.icns"));

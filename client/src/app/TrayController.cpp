@@ -28,10 +28,15 @@ TrayController::TrayController(QObject *parent)
     qInfo() << "TrayController: app icon null=" << appIcon.isNull() << "icns=" << icns;
     m_tray = new QSystemTrayIcon(appIcon, this);
     auto *menu = new QMenu();
+    // ─── Ariadne's Thread [AT-0320] ─────────────────────
+    // What: Tray lists Path then Full Screen Shot; Path is the UI name
+    // Why:  Partial capture is Path everywhere, matching onboarding order
+    // Date: 2026-08-28
+    // Related: [AT-0318] FirstRunWizard.cpp, [AT-0319] SettingsWindow.cpp
+    // ─────────────────────────────────────────────────────
+    m_pathAction = menu->addAction(QStringLiteral("Path"), this, &TrayController::captureRequested);
     m_fullScreenAction = menu->addAction(QStringLiteral("Full Screen Shot"), this,
                                          &TrayController::fullScreenCaptureRequested);
-    m_pathAction = menu->addAction(QStringLiteral("Path Screen Shot"), this,
-                                   &TrayController::captureRequested);
     m_fullScreenAction->setShortcutVisibleInContextMenu(true);
     m_pathAction->setShortcutVisibleInContextMenu(true);
     m_fullScreenAction->setShortcutContext(Qt::WidgetShortcut);
@@ -46,7 +51,7 @@ TrayController::TrayController(QObject *parent)
                 << " capture only from menu or hotkey";
     });
     refreshCaptureShortcuts(LocalStore::fullScreenHotkeySpec(), LocalStore::hotkeySpec());
-    qInfo() << "TrayController: created";
+    qInfo() << "TrayController: created order=path,full";
 }
 
 void TrayController::show()
@@ -57,14 +62,14 @@ void TrayController::show()
 
 void TrayController::refreshCaptureShortcuts(const QString &fullScreenSpec, const QString &pathSpec)
 {
+    if (m_pathAction) {
+        const QKeySequence seq = LocalStore::keySequenceFromSpec(pathSpec);
+        m_pathAction->setShortcut(seq);
+        qInfo() << "TrayController: Path shortcut=" << LocalStore::nativeHotkeyLabel(pathSpec);
+    }
     if (m_fullScreenAction) {
         const QKeySequence seq = LocalStore::keySequenceFromSpec(fullScreenSpec);
         m_fullScreenAction->setShortcut(seq);
         qInfo() << "TrayController: Full Screen Shot shortcut=" << LocalStore::nativeHotkeyLabel(fullScreenSpec);
-    }
-    if (m_pathAction) {
-        const QKeySequence seq = LocalStore::keySequenceFromSpec(pathSpec);
-        m_pathAction->setShortcut(seq);
-        qInfo() << "TrayController: Path Screen Shot shortcut=" << LocalStore::nativeHotkeyLabel(pathSpec);
     }
 }
