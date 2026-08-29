@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-# ─── Ariadne's Thread [AT-0380] ─────────────────────
-# What: Bundle version 0.1.8
-# Why:  New notarized Sparkle release after agent copy and seenshot.app feed
+# ─── Ariadne's Thread [AT-0383] ─────────────────────
+# What: Bundle version 0.1.9
+# Why:  Notarized Sparkle release with Codex left of Cursor and matching copy hints
 # Date: 2026-08-29
-# Related: [AT-0380] packaging/macos/Info.plist, [AT-0380] client/src/main.cpp
+# Related: [AT-0383] packaging/macos/Info.plist, [AT-0383] client/src/main.cpp
 # ─────────────────────────────────────────────────────
-project(SeenShot VERSION 0.1.8 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 0.1.9 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -163,6 +163,26 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Sparkle/Sparkle.framework")
             "${CMAKE_SOURCE_DIR}/third_party/Sparkle/Sparkle.framework"
             "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Frameworks/Sparkle.framework"
         COMMENT "Copy Sparkle.framework into app bundle"
+    )
+endif()
+
+# ─── Ariadne's Thread [AT-0382] ─────────────────────
+# What: POST_BUILD copy agent SVGs into Contents/Resources
+# Why:  MACOSX_PACKAGE_LOCATION kept stale cursor.svg/codex.svg after the files were swapped
+# Date: 2026-08-29
+# Related: [AT-0368] CMakeLists.txt:SEENSHOT_AGENT_ICONS, [AT-0382] AnnotateWindow.cpp:agents
+# ─────────────────────────────────────────────────────
+if(APPLE)
+    add_custom_command(TARGET SeenShot POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/packaging/macos/agents/claude.svg"
+            "${CMAKE_SOURCE_DIR}/packaging/macos/agents/cursor.svg"
+            "${CMAKE_SOURCE_DIR}/packaging/macos/agents/codex.svg"
+            "${CMAKE_SOURCE_DIR}/packaging/macos/agents/opencode.svg"
+            "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Resources/"
+        COMMENT "Copy agent SVG marks into Resources"
     )
 endif()
 

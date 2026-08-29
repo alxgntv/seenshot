@@ -913,12 +913,18 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     // Related: [AT-0368] MacIcons.mm:macResourceIcon, [AT-0076] AnnotateWindow.cpp:exportedImage
     // ─────────────────────────────────────────────────────
     toolbar->addSeparator();
+    // ─── Ariadne's Thread [AT-0382] ─────────────────────
+    // What: Toolbar order is Claude, Codex blob, Cursor cube, OpenCode
+    // Why:  Cube is Cursor; the blob to its left is Codex; copy hint must match the mark
+    // Date: 2026-08-29
+    // Related: [AT-0381] packaging/macos/agents, [AT-0379] AnnotateWindow.cpp:showCopyHint
+    // ─────────────────────────────────────────────────────
     const struct {
         const char *file;
         const char *name;
     } agents[] = {{"claude.svg", "Claude"},
-                   {"cursor.svg", "Cursor"},
                    {"codex.svg", "Codex"},
+                   {"cursor.svg", "Cursor"},
                    {"opencode.svg", "OpenCode"}};
     for (const auto &agent : agents) {
         auto *btn = new QToolButton(toolbar);
@@ -929,20 +935,16 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
         btn->setCheckable(false);
         btn->setAutoRaise(true);
         const QString agentName = QString::fromUtf8(agent.name);
-        // ─── Ariadne's Thread [AT-0372] ─────────────────────
-        // What: Pass the clicked agent button into copy so the hint can sit under it
-        // Why:  Hint must be under this icon, not under Save
-        // Date: 2026-08-29
-        // Related: [AT-0379] AnnotateWindow.cpp:showCopyHint, [AT-0368] AnnotateWindow.cpp:m_toolsBar
-        // ─────────────────────────────────────────────────────
-        connect(btn, &QToolButton::clicked, this, [this, agentName, btn]() {
+        const QString agentFile = QString::fromUtf8(agent.file);
+        connect(btn, &QToolButton::clicked, this, [this, agentName, agentFile, btn]() {
             qInfo() << "AnnotateWindow: agent copy click name=" << agentName
+                    << "file=" << agentFile
                     << "btn=" << static_cast<void *>(btn) << "size=" << btn->size();
             copyExportedImageToClipboard(btn, agentName);
         });
         toolbar->addWidget(btn);
-        qInfo() << "AnnotateWindow: agent button" << agent.name
-                << "iconNull=" << btn->icon().isNull() << "file=" << agent.file;
+        qInfo() << "AnnotateWindow: agent button name=" << agent.name
+                << "file=" << agent.file << "iconNull=" << btn->icon().isNull();
     }
     // ─── Ariadne's Thread [AT-0370] ─────────────────────
     // What: Trailing QToolBar separator after the agent copy icons
