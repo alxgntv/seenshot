@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-project(SeenShot VERSION 0.1.7 LANGUAGES CXX OBJCXX)
+# ─── Ariadne's Thread [AT-0380] ─────────────────────
+# What: Bundle version 0.1.8
+# Why:  New notarized Sparkle release after agent copy and seenshot.app feed
+# Date: 2026-08-29
+# Related: [AT-0380] packaging/macos/Info.plist, [AT-0380] client/src/main.cpp
+# ─────────────────────────────────────────────────────
+project(SeenShot VERSION 0.1.8 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,7 +80,22 @@ set(SEENSHOT_ICNS ${CMAKE_SOURCE_DIR}/packaging/macos/SeenShot.icns)
 set(SEENSHOT_SCREEN_REC ${CMAKE_SOURCE_DIR}/packaging/macos/screen-recording-toggle.png)
 set_source_files_properties(${SEENSHOT_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 set_source_files_properties(${SEENSHOT_SCREEN_REC} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS} ${SEENSHOT_SCREEN_REC})
+# ─── Ariadne's Thread [AT-0368] ─────────────────────
+# What: Bundle Claude/Cursor/Codex/OpenCode SVG marks in Resources
+# Why:  Annotate toolbar copies the screenshot for paste into agent chats
+# Date: 2026-08-28
+# Related: [AT-0368] MacIcons.mm:macResourceIcon, [AT-0125] CMakeLists.txt
+# ─────────────────────────────────────────────────────
+set(SEENSHOT_AGENT_ICONS
+    ${CMAKE_SOURCE_DIR}/packaging/macos/agents/claude.svg
+    ${CMAKE_SOURCE_DIR}/packaging/macos/agents/cursor.svg
+    ${CMAKE_SOURCE_DIR}/packaging/macos/agents/codex.svg
+    ${CMAKE_SOURCE_DIR}/packaging/macos/agents/opencode.svg
+)
+foreach(_agent_icon IN LISTS SEENSHOT_AGENT_ICONS)
+    set_source_files_properties(${_agent_icon} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+endforeach()
+qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS} ${SEENSHOT_SCREEN_REC} ${SEENSHOT_AGENT_ICONS})
 
 set_source_files_properties(
     client/src/camera/CameraCapture.mm
@@ -107,6 +128,7 @@ target_link_libraries(SeenShot PRIVATE
     "-framework CoreVideo"
     "-framework CoreMedia"
     "-framework QuartzCore"
+    "-framework Accelerate"
 )
 
 set_target_properties(SeenShot PROPERTIES

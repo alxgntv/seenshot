@@ -18,11 +18,14 @@
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QPixmap>
+#include <QElapsedTimer>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
 #include <QStyleOptionGraphicsItem>
 #include <algorithm>
+
+#include <Accelerate/Accelerate.h>
 
 void setAnnotateKind(QGraphicsItem *item, AnnotateKind kind)
 {
@@ -415,6 +418,12 @@ void syncStepNumbers(QGraphicsScene *scene)
     qInfo() << "syncStepNumbers: count=" << rects.size();
 }
 
+// ─── Ariadne's Thread [AT-0339] ─────────────────────
+// What: Blur uses vImageBoxConvolve_ARGB8888 instead of QImage::pixel
+// Why:  Slider valueChanged re-blurs the patch; pixel/setPixel froze the editor
+// Date: 2026-08-28
+// Related: [AT-0330] AnnotateWindow.cpp:m_blurSlider, [AT-0078] AnnotateItems.cpp:boxBlur
+// ─────────────────────────────────────────────────────
 QImage boxBlur(const QImage &patch, int radius)
 {
     if (patch.isNull()) {
@@ -423,29 +432,44 @@ QImage boxBlur(const QImage &patch, int radius)
     }
     const int r = qBound(0, radius, 20);
     if (r == 0) {
-        qInfo() << "boxBlur: radius 0, copy" << patch.size();
+        qInfo() << "boxBlur: radius 0, copy" << patch.size() << "format=" << patch.format();
         return patch;
     }
-    QImage out = patch;
-    for (int y = 0; y < patch.height(); ++y) {
-        for (int x = 0; x < patch.width(); ++x) {
-            int red = 0, green = 0, blue = 0, alpha = 0, n = 0;
-            for (int dy = -r; dy <= r; ++dy) {
-                for (int dx = -r; dx <= r; ++dx) {
-                    const int xx = qBound(0, x + dx, patch.width() - 1);
-                    const int yy = qBound(0, y + dy, patch.height() - 1);
-                    const QRgb px = patch.pixel(xx, yy);
-                    red += qRed(px);
-                    green += qGreen(px);
-                    blue += qBlue(px);
-                    alpha += qAlpha(px);
-                    ++n;
-                }
-            }
-            out.setPixel(x, y, qRgba(red / n, green / n, blue / n, alpha / n));
-        }
+    QImage src = patch.convertToFormat(QImage::Format_ARGB32);
+    if (src.isNull() || src.width() < 1 || src.height() < 1) {
+        qWarning() << "boxBlur: ARGB32 convert failed size=" << patch.size() << "format=" << patch.format();
+        return patch;
     }
-    qInfo() << "boxBlur: radius=" << r << "size=" << patch.size();
+    QImage out(src.size(), QImage::Format_ARGB32);
+    if (out.isNull()) {
+        qWarning() << "boxBlur: dest alloc failed size=" << src.size();
+        return patch;
+    }
+    vImage_Buffer srcBuf{};
+    srcBuf.data = src.bits();
+    srcBuf.height = static_cast<vImagePixelCount>(src.height());
+    srcBuf.width = static_cast<vImagePixelCount>(src.width());
+    srcBuf.rowBytes = static_cast<size_t>(src.bytesPerLine());
+    vImage_Buffer destBuf{};
+    destBuf.data = out.bits();
+    destBuf.height = static_cast<vImagePixelCount>(out.height());
+    destBuf.width = static_cast<vImagePixelCount>(out.width());
+    destBuf.rowBytes = static_cast<size_t>(out.bytesPerLine());
+    const uint32_t kernel = static_cast<uint32_t>(2 * r + 1);
+    Pixel_8888 background = {0, 0, 0, 0};
+    QElapsedTimer timer;
+    timer.start();
+    const vImage_Error err = vImageBoxConvolve_ARGB8888(&srcBuf, &destBuf, nullptr, 0, 0, kernel, kernel,
+                                                          background, kvImageEdgeExtend);
+    const qint64 ms = timer.elapsed();
+    if (err != kvImageNoError) {
+        qWarning() << "boxBlur: vImageBoxConvolve_ARGB8888 err=" << static_cast<long>(err)
+                   << "radius=" << r << "kernel=" << kernel << "size=" << src.size()
+                   << "srcRow=" << srcBuf.rowBytes << "destRow=" << destBuf.rowBytes << "ms=" << ms;
+        return patch;
+    }
+    qInfo() << "boxBlur: vImage radius=" << r << "kernel=" << kernel << "size=" << src.size()
+            << "srcRow=" << srcBuf.rowBytes << "destRow=" << destBuf.rowBytes << "ms=" << ms;
     return out;
 }
 
@@ -634,6 +658,43 @@ qreal AnnotateTextItem::minTextWidth() const
     return 40;
 }
 
+// ─── Ariadne's Thread [AT-0348] ─────────────────────
+// What: Extra box height so Bottom and corner handles can stretch the text frame
+// Why:  QGraphicsTextItem height followed the document only; down/diagonal did nothing
+// Date: 2026-08-28
+// Related: [AT-0156] AnnotateWindow.cpp:applySelectResize, [AT-0040] AnnotateItems.h:AnnotateTextItem
+// ─────────────────────────────────────────────────────
+qreal AnnotateTextItem::minTextHeight() const
+{
+    QRectF box = QGraphicsTextItem::boundingRect();
+    if (m_textOutline) {
+        const qreal pad = stickerStrokeWidth() * 0.5 + 1.0;
+        box.adjust(-pad, -pad, pad, pad);
+    }
+    const qreal height = qMax(16.0, box.height());
+    qInfo() << "AnnotateTextItem: minTextHeight=" << height << "outline=" << m_textOutline;
+    return height;
+}
+
+void AnnotateTextItem::setBoxHeight(qreal height)
+{
+    const qreal minH = minTextHeight();
+    const qreal next = qMax(height, minH);
+    if (qFuzzyCompare(m_boxHeight + 1.0, next + 1.0)) {
+        qInfo() << "AnnotateTextItem: setBoxHeight unchanged=" << next << "min=" << minH;
+        return;
+    }
+    prepareGeometryChange();
+    m_boxHeight = next;
+    setData(kAnnotateRoleTextHeight, m_boxHeight);
+    qInfo() << "AnnotateTextItem: setBoxHeight=" << m_boxHeight << "min=" << minH;
+}
+
+qreal AnnotateTextItem::boxHeight() const
+{
+    return qMax(m_boxHeight, minTextHeight());
+}
+
 bool AnnotateTextItem::isEditing() const
 {
     return textInteractionFlags() & Qt::TextEditorInteraction;
@@ -647,11 +708,30 @@ bool AnnotateTextItem::isResizeHandle(const QPointF &itemPos) const
     return hit;
 }
 
-void AnnotateTextItem::beginEdit()
+void AnnotateTextItem::beginEdit(const QPointF &itemPos)
 {
     setTextInteractionFlags(Qt::TextEditorInteraction);
     setFocus(Qt::MouseFocusReason);
-    qInfo() << "AnnotateTextItem: beginEdit";
+    QTextCursor cursor = textCursor();
+    cursor.clearSelection();
+    int hit = -1;
+    QTextDocument *doc = document();
+    QAbstractTextDocumentLayout *layout = doc ? doc->documentLayout() : nullptr;
+    if (layout) {
+        hit = layout->hitTest(itemPos, Qt::FuzzyHit);
+        qInfo() << "AnnotateTextItem: beginEdit hitTest=" << hit << "itemPos=" << itemPos
+                << "docSize=" << doc->size();
+    } else {
+        qWarning() << "AnnotateTextItem: beginEdit no document layout";
+    }
+    if (hit >= 0) {
+        cursor.setPosition(hit);
+    } else {
+        cursor.movePosition(QTextCursor::End);
+    }
+    setTextCursor(cursor);
+    qInfo() << "AnnotateTextItem: beginEdit cursor=" << textCursor().position()
+            << "hasFocus=" << hasFocus() << "flags=" << int(textInteractionFlags());
 }
 
 void AnnotateTextItem::endEdit()
@@ -756,12 +836,21 @@ QPainterPath AnnotateTextItem::stickerGlyphPath() const
     return path;
 }
 
+// ─── Ariadne's Thread [AT-0350] ─────────────────────
+// What: Grow boundingRect to the extra box height from Bottom/corner stretch
+// Why:  Handles and hit-tests sat on the document box so down-drag had no frame
+// Date: 2026-08-28
+// Related: [AT-0348] AnnotateItems.cpp:setBoxHeight, [AT-0156] AnnotateWindow.cpp:applySelectResize
+// ─────────────────────────────────────────────────────
 QRectF AnnotateTextItem::boundingRect() const
 {
     QRectF box = QGraphicsTextItem::boundingRect();
     if (m_textOutline) {
         const qreal pad = stickerStrokeWidth() * 0.5 + 1.0;
         box.adjust(-pad, -pad, pad, pad);
+    }
+    if (m_boxHeight > box.height()) {
+        box.setHeight(m_boxHeight);
     }
     return box;
 }
@@ -820,8 +909,18 @@ void AnnotateTextItem::applyTextStyle()
         doc->setUndoRedoEnabled(undoOn);
     }
     update();
+    if (m_boxHeight > 0) {
+        const qreal minH = minTextHeight();
+        if (m_boxHeight < minH) {
+            prepareGeometryChange();
+            m_boxHeight = minH;
+            setData(kAnnotateRoleTextHeight, m_boxHeight);
+            qInfo() << "AnnotateTextItem: applyTextStyle grew boxHeight=" << m_boxHeight;
+        }
+    }
     qInfo() << "AnnotateTextItem: applyTextStyle size=" << m_textSize << "outline=" << m_textOutline
-            << "color=" << defaultTextColor() << "stroke=" << stickerStrokeWidth();
+            << "color=" << defaultTextColor() << "stroke=" << stickerStrokeWidth()
+            << "boxHeight=" << m_boxHeight;
 }
 
 // ─── Ariadne's Thread [AT-0160] ─────────────────────

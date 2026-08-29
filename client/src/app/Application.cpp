@@ -297,13 +297,33 @@ void Application::showScreenRecordingHelp()
 // ─────────────────────────────────────────────────────
 bool Application::eventFilter(QObject *watched, QEvent *event)
 {
-    if (m_onboarding && event->type() == QEvent::ApplicationStateChange
-        && QGuiApplication::applicationState() == Qt::ApplicationActive
-        && !m_onboarding->isActiveWindow()) {
-        qInfo() << "Application: raise onboarding from Dock active=" << m_onboarding->isActiveWindow();
-        MacPermissions::activateApp();
-        m_onboarding->raise();
-        m_onboarding->activateWindow();
+    // ─── Ariadne's Thread [AT-0336] ─────────────────────
+    // What: Raise AnnotateWindow when the app becomes active from Dock or Cmd+Tab
+    // Why:  Regular policy shows the icon; the editor still needs to become key
+    // Date: 2026-08-28
+    // Related: [AT-0335] Application.cpp:showAnnotate, [AT-0300] MacPermissions.mm:setDockVisible
+    // ─────────────────────────────────────────────────────
+    if (event->type() == QEvent::ApplicationStateChange
+        && QGuiApplication::applicationState() == Qt::ApplicationActive) {
+        if (m_onboarding && !m_onboarding->isActiveWindow()) {
+            qInfo() << "Application: raise onboarding from Dock active=" << m_onboarding->isActiveWindow();
+            MacPermissions::activateApp();
+            m_onboarding->raise();
+            m_onboarding->activateWindow();
+        } else if (m_editor && m_editor->isVisible()) {
+            QWidget *modal = QApplication::activeModalWidget();
+            if (modal) {
+                qInfo() << "Application: skip raise annotate, modal=" << modal->metaObject()->className();
+            } else if (!m_editor->isActiveWindow()) {
+                qInfo() << "Application: raise annotate from Dock/Cmd+Tab visible=" << m_editor->isVisible()
+                        << " active=" << m_editor->isActiveWindow();
+                MacPermissions::activateApp();
+                m_editor->raise();
+                m_editor->activateWindow();
+            } else {
+                qInfo() << "Application: annotate already key after Dock/Cmd+Tab";
+            }
+        }
     }
     if (watched == qApp && event->type() == QEvent::Quit) {
         const bool accept = MacPermissions::shouldAcceptApplicationQuit();
@@ -527,8 +547,21 @@ void Application::showAnnotate(const QImage &image)
     m_editor->setAttribute(Qt::WA_DeleteOnClose);
     m_editor->setAttribute(Qt::WA_QuitOnClose, false);
     qApp->setQuitOnLastWindowClosed(false);
-    connect(m_editor, &QObject::destroyed, this, []() {
-        qInfo() << "Application: annotate window destroyed, agent still running";
+    // ─── Ariadne's Thread [AT-0335] ─────────────────────
+    // What: NSApplicationActivationPolicyRegular while AnnotateWindow is shown
+    // Why:  Cmd+Tab and Dock must reach the screenshot editor; LSUIElement stays in Info.plist
+    // Date: 2026-08-28
+    // Related: [AT-0300] MacPermissions.mm:setDockVisible, [AT-0303] Application.cpp:finishLaunch
+    // ─────────────────────────────────────────────────────
+    connect(m_editor, &QObject::destroyed, this, [this]() {
+        qInfo() << "Application: annotate window destroyed, agent still running"
+                << " replacement=" << (m_editor != nullptr);
+        if (m_editor) {
+            qInfo() << "Application: keep Dock Regular for replacement editor";
+            return;
+        }
+        const bool dockOff = MacPermissions::setDockVisible(false);
+        qInfo() << "Application: annotate dockOff=" << dockOff;
     });
     qInfo() << "Application: annotate WA_QuitOnClose=" << m_editor->testAttribute(Qt::WA_QuitOnClose)
             << " quitOnLastWindowClosed=" << qApp->quitOnLastWindowClosed();
@@ -537,11 +570,21 @@ void Application::showAnnotate(const QImage &image)
         connect(m_editor, &AnnotateWindow::photoCycleEnded, updater, &SparkleUpdater::retryPendingInstall);
         updater->attachEditor(m_editor);
     }
+    // ─── Ariadne's Thread [AT-0372] ─────────────────────
+    // What: Stop forwarding agent copy to the tray banner
+    // Why:  Hint is a QToolTip under the clicked icon, not a system notification
+    // Date: 2026-08-29
+    // Related: [AT-0372] AnnotateWindow.cpp:copyExportedImageToClipboard, [AT-0369] TrayController.cpp:showPasteHint
+    // ─────────────────────────────────────────────────────
+    qInfo() << "Application: annotate paste hint is toolbar tooltip";
+    const bool dockOn = MacPermissions::setDockVisible(true);
+    qInfo() << "Application: annotate dockOn=" << dockOn;
     MacPermissions::activateApp();
     m_editor->show();
     m_editor->raise();
     m_editor->activateWindow();
-    qInfo() << "Application: annotate window shown";
+    qInfo() << "Application: annotate window shown visible=" << m_editor->isVisible()
+            << " active=" << m_editor->isActiveWindow();
 }
 
 void Application::openSettings()

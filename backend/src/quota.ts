@@ -224,20 +224,53 @@ export class QuotaShard {
     );
     while (current + incoming > cap) {
       const oldest = await this.env.DB.prepare(
-        "SELECT shot_id, bytes, public_id, visibility FROM shots WHERE uid = ? ORDER BY created_at ASC LIMIT 1",
+        "SELECT shot_id, bytes, public_id, visibility FROM shots WHERE uid = ? AND visibility != 'unavailable' AND bytes > 0 ORDER BY created_at ASC LIMIT 1",
       )
         .bind(uid)
         .first<{ shot_id: string; bytes: number; public_id: string | null; visibility: string }>();
       if (!oldest) {
+        console.log(`QuotaShard: evictUntilFits no live shots uid=${uid} current=${current} incoming=${incoming}`);
         break;
       }
-      await this.deleteShot(uid, oldest.shot_id, oldest.public_id, oldest.visibility);
+      await this.evictShot(uid, oldest.shot_id, oldest.public_id, oldest.visibility);
       current -= oldest.bytes;
       evicted.push(oldest.shot_id);
-      console.log(`QuotaShard: evicted ${oldest.shot_id} bytes=${oldest.bytes}`);
+      console.log(
+        `QuotaShard: evicted ${oldest.shot_id} bytes=${oldest.bytes} visibility=${oldest.visibility} current=${current}`,
+      );
     }
     await this.env.DB.prepare("UPDATE users SET used_bytes = ? WHERE uid = ?").bind(Math.max(0, current), uid).run();
     return evicted;
+  }
+
+  // ─── Ariadne's Thread [AT-0325] ─────────────────────
+  // What: Quota eviction deletes PNG bytes; public rows stay as visibility=unavailable
+  // Why:  /screenshot/{id} must keep opening after Free 10 MB eviction
+  // Date: 2026-08-28
+  // Related: [AT-0279] backend/src/quota.ts:evictUntilFits, seenshot-web→src/index.ts:serveShare
+  // ─────────────────────────────────────────────────────
+  private async evictShot(uid: string, shotId: string, publicId: string | null, visibility: string) {
+    await this.env.BUCKET.delete(`private/${uid}/${shotId}.png`);
+    if (publicId) {
+      await this.env.BUCKET.delete(`public/${publicId}.png`);
+    }
+    await this.env.BUCKET.delete(uploadProgressKey(shotId));
+    if (visibility === "public" && publicId) {
+      await this.env.DB.prepare(
+        "UPDATE shots SET bytes = 0, visibility = 'unavailable' WHERE shot_id = ? AND uid = ?",
+      )
+        .bind(shotId, uid)
+        .run();
+      console.log(
+        `QuotaShard: evictShot tombstone shot=${shotId} publicId=${publicId} visibility=${visibility}` +
+          ` progressKey=${uploadProgressKey(shotId)}`,
+      );
+      return;
+    }
+    await this.env.DB.prepare("DELETE FROM shots WHERE shot_id = ?").bind(shotId).run();
+    console.log(
+      `QuotaShard: evictShot deleted shot=${shotId} visibility=${visibility} progressKey=${uploadProgressKey(shotId)}`,
+    );
   }
 
   private async deleteShot(uid: string, shotId: string, publicId: string | null, visibility: string) {

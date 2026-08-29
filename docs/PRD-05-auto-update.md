@@ -10,7 +10,7 @@ PRD-03: [Photo cutout](/Users/alexign/Desktop/seenshot/docs/PRD-03-photo-cutout.
 
 PRD-04: [Settings and sign-in](/Users/alexign/Desktop/seenshot/docs/PRD-04-settings-auth.md)
 
-The product gap: Sparkle is already linked (`SparkleUpdater::start`, `SUFeedURL` `https://updates.seenshot.com/appcast.xml`, `SUEnableAutomaticChecks`). `SUPublicEDKey` is empty, so checks cannot be trusted. The UI is Sparkle’s own `SPUStandardUserDriver` windows, not the annotate screen. Install relaunches the process. `LocalStore` has no editor session. The open screenshot and its objects are lost.
+The product gap: Sparkle is already linked (`SparkleUpdater::start`, `SUFeedURL` `https://seenshot.app/appcast.xml`, `SUEnableAutomaticChecks`). `SUPublicEDKey` is empty, so checks cannot be trusted. The UI is Sparkle’s own `SPUStandardUserDriver` windows, not the annotate screen. Install relaunches the process. `LocalStore` has no editor session. The open screenshot and its objects are lost.
 
 UI strings: English. Logs: English.
 
@@ -20,7 +20,7 @@ UI strings: English. Logs: English.
 
 | Area | Now | Must become |
 | --- | --- | --- |
-| Channel | Website download only. No App Store. Feed URL already in Info.plist. | Same feed. Same Sparkle. New version = new archive + appcast on `updates.seenshot.com`. |
+| Channel | Website download only. No App Store. Feed URL already in Info.plist. | Same feed. Same Sparkle. New version = new archive + appcast on `https://seenshot.app/appcast.xml`. |
 | Trust | `SUPublicEDKey` empty. `startUpdater` can fail. | Official Sparkle EdDSA public key in Info.plist. Appcast items signed with the matching private key. |
 | Check | `SUEnableAutomaticChecks` on. `SPUUpdater` + `SPUStandardUserDriver`. | Keep automatic checks. Do not add a second HTTP updater. |
 | Offer | Sparkle system windows. | One card on the annotate screen: copy + **Update**. |
@@ -37,7 +37,7 @@ Official Sparkle only:
 
 - `SPUUpdater` (already started from `main.cpp`)
 - Custom `SPUUserDriver` instead of `SPUStandardUserDriver`
-- Feed already in Info.plist / `Config::sparkleFeedUrl()`: `https://updates.seenshot.com/appcast.xml`
+- Feed already in Info.plist / `Config::sparkleFeedUrl()`: `https://seenshot.app/appcast.xml`
 - `SUEnableAutomaticChecks` stays true
 - `SUAutomaticallyUpdate` stays off
 
@@ -55,7 +55,7 @@ For each release:
 
 - Raise `CFBundleShortVersionString` and `CFBundleVersion` in `packaging/macos/Info.plist`.
 - Sign the `.app` with the existing Apple Development identity and `packaging/macos/SeenShot.entitlements`.
-- Upload a Sparkle archive (UDZO DMG of the `.app` plus an Applications symlink) and an `appcast.xml` to `https://updates.seenshot.com/`.
+- Publish a Sparkle archive (UDZO DMG of the `.app` plus an Applications symlink) to GitHub Releases. CI writes `docs/appcast.xml`; the site Worker proxies that live XML to `https://seenshot.app/appcast.xml`. Do not copy the XML into `public/`. Do not use `updates.seenshot.com`.
 - Sign the enclosure with Sparkle’s official EdDSA tools. Put the public key in `SUPublicEDKey`. An empty key is forbidden.
 
 The website download and the feed enclosure are the same DMG. Do not invent a second zip or “latest.dmg” installer path inside the app.

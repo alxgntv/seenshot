@@ -19,3 +19,10 @@ QIcon macToolbarIcon(const QString &symbolName, const QColor &tint = QColor());
 // Related: [AT-0302] FirstRunWizard.cpp, [AT-0055] MacIcons.mm:macToolbarIcon
 // ─────────────────────────────────────────────────────
 QPixmap macBundleIcon(int pointSize);
+// ─── Ariadne's Thread [AT-0368] ─────────────────────
+// What: Rasterize an SVG from Contents/Resources into a toolbar QIcon
+// Why:  Agent marks are SVG files, not SF Symbols
+// Date: 2026-08-28
+// Related: [AT-0149] MacIcons.mm:macToolbarIcon, [AT-0368] AnnotateWindow.cpp:copyExportedImageToClipboard
+// ─────────────────────────────────────────────────────
+QIcon macResourceIcon(const QString &fileName);

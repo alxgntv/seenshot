@@ -508,17 +508,28 @@ bool AuthSession::startWebsiteSignIn(QString *errorCode)
         endAuth();
         return false;
     }
-    QUrl url(Config::websiteBaseUrl() + QStringLiteral("/oauth/authorize"));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
-    query.addQueryItem(QStringLiteral("client_id"), Config::oauthClientId());
-    query.addQueryItem(QStringLiteral("redirect_uri"), Config::oauthRedirectUri());
-    query.addQueryItem(QStringLiteral("code_challenge"), challenge);
-    query.addQueryItem(QStringLiteral("code_challenge_method"), QStringLiteral("S256"));
-    query.addQueryItem(QStringLiteral("state"), state);
-    url.setQuery(query);
+    // ─── Ariadne's Thread [AT-0324] ─────────────────────
+    // What: Open /signup?next=/oauth/authorize with PKCE from every Mac sign-in start
+    // Why:  Registration must land on {website}/signup from Settings and Share
+    // Date: 2026-08-28
+    // Related: [AT-0193] AuthSession.cpp:startWebsiteSignIn, seenshot-web→signin.js:afterSignInPath
+    // ─────────────────────────────────────────────────────
+    QUrlQuery authorizeQuery;
+    authorizeQuery.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
+    authorizeQuery.addQueryItem(QStringLiteral("client_id"), Config::oauthClientId());
+    authorizeQuery.addQueryItem(QStringLiteral("redirect_uri"), Config::oauthRedirectUri());
+    authorizeQuery.addQueryItem(QStringLiteral("code_challenge"), challenge);
+    authorizeQuery.addQueryItem(QStringLiteral("code_challenge_method"), QStringLiteral("S256"));
+    authorizeQuery.addQueryItem(QStringLiteral("state"), state);
+    const QString next = QStringLiteral("/oauth/authorize?") + authorizeQuery.toString(QUrl::FullyEncoded);
+    QUrl url(Config::websiteBaseUrl() + QStringLiteral("/signup"));
+    QUrlQuery signupQuery;
+    signupQuery.addQueryItem(QStringLiteral("next"), next);
+    url.setQuery(signupQuery);
+    qInfo() << "AuthSession: website signup url host=" << url.host() << " path=" << url.path()
+            << " nextChars=" << next.size() << " challengeChars=" << challenge.size();
     if (!m_oauth->start(url)) {
-        qWarning() << "AuthSession: NSWorkspace failed to open authorize URL";
+        qWarning() << "AuthSession: NSWorkspace failed to open signup URL";
         clearPendingPkce();
         endAuth();
         if (errorCode) {
@@ -527,7 +538,7 @@ bool AuthSession::startWebsiteSignIn(QString *errorCode)
         return false;
     }
     endAuth();
-    qInfo() << "AuthSession: website sign-in opened default browser";
+    qInfo() << "AuthSession: website sign-in opened default browser path=/signup";
     return true;
 }
 

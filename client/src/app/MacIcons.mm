@@ -2,7 +2,9 @@
 
 #include <QByteArray>
 #include <QDebug>
+#include <QIcon>
 #include <QPixmap>
+#include <QString>
 
 #import <AppKit/AppKit.h>
 
@@ -170,4 +172,97 @@ QPixmap macBundleIcon(int pointSize)
     pix.setDevicePixelRatio(scale > 0 ? scale : 1.0);
     qInfo() << "macBundleIcon: loaded size=" << pix.size() << " dpr=" << pix.devicePixelRatio();
     return pix;
+}
+
+// ─── Ariadne's Thread [AT-0368] ─────────────────────
+// What: Rasterize an SVG from Contents/Resources into a toolbar QIcon
+// Why:  Agent marks are SVG files, not SF Symbols
+// Date: 2026-08-28
+// Related: [AT-0149] MacIcons.mm:macToolbarIcon, [AT-0368] AnnotateWindow.cpp:copyExportedImageToClipboard
+// ─────────────────────────────────────────────────────
+QIcon macResourceIcon(const QString &fileName)
+{
+    if (fileName.isEmpty()) {
+        qWarning() << "macResourceIcon: empty fileName";
+        return {};
+    }
+    NSString *nsName = fileName.toNSString();
+    NSString *base = [nsName stringByDeletingPathExtension];
+    NSString *ext = [nsName pathExtension];
+    NSString *path = [[NSBundle mainBundle] pathForResource:base ofType:ext];
+    if (!path) {
+        qWarning() << "macResourceIcon: missing" << fileName;
+        return {};
+    }
+    NSImage *image = [[NSImage alloc] initWithContentsOfFile:path];
+    if (!image) {
+        qWarning() << "macResourceIcon: NSImage failed, QIcon fallback" << fileName
+                   << "path=" << QString::fromNSString(path);
+        const QIcon qtIcon(QString::fromNSString(path));
+        if (qtIcon.isNull()) {
+            qWarning() << "macResourceIcon: QIcon also null" << fileName;
+            return {};
+        }
+        qInfo() << "macResourceIcon: QIcon fallback ok" << fileName;
+        return qtIcon;
+    }
+    const CGFloat scale = [NSScreen mainScreen] ? [NSScreen mainScreen].backingScaleFactor : 1.0;
+    const NSInteger px = (NSInteger)llround(22.0 * (scale > 0 ? scale : 1.0));
+    qInfo() << "macResourceIcon: rasterize" << fileName << "px=" << (int)px << "scale=" << scale
+            << "path=" << QString::fromNSString(path);
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:nil
+                      pixelsWide:px
+                      pixelsHigh:px
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSDeviceRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0];
+    if (!rep) {
+        qWarning() << "macResourceIcon: NSBitmapImageRep failed" << fileName;
+        return {};
+    }
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext *gc = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!gc) {
+        [NSGraphicsContext restoreGraphicsState];
+        qWarning() << "macResourceIcon: graphics context failed" << fileName;
+        return {};
+    }
+    [NSGraphicsContext setCurrentContext:gc];
+    const NSRect canvas = NSMakeRect(0, 0, px, px);
+    [[NSColor clearColor] set];
+    NSRectFill(canvas);
+    NSSize nat = image.size;
+    if (nat.width < 1.0 || nat.height < 1.0) {
+        nat = NSMakeSize(px, px);
+    }
+    const CGFloat fit = MIN(canvas.size.width / nat.width, canvas.size.height / nat.height);
+    const NSSize draw = NSMakeSize(nat.width * fit, nat.height * fit);
+    const NSRect dest = NSMakeRect((canvas.size.width - draw.width) * 0.5,
+                                   (canvas.size.height - draw.height) * 0.5, draw.width, draw.height);
+    [image drawInRect:dest
+              fromRect:NSZeroRect
+             operation:NSCompositingOperationSourceOver
+              fraction:1.0
+        respectFlipped:YES
+                 hints:nil];
+    [NSGraphicsContext restoreGraphicsState];
+    NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!png) {
+        qWarning() << "macResourceIcon: PNG encode failed" << fileName;
+        return {};
+    }
+    QPixmap pix;
+    if (!pix.loadFromData(QByteArray::fromNSData(png), "PNG")) {
+        qWarning() << "macResourceIcon: PNG load failed" << fileName << "bytes=" << (int)png.length;
+        return {};
+    }
+    pix.setDevicePixelRatio(scale > 0 ? scale : 1.0);
+    qInfo() << "macResourceIcon: loaded" << fileName << "size=" << pix.size()
+            << "dpr=" << pix.devicePixelRatio() << "dest=" << dest.size.width << "x" << dest.size.height;
+    return QIcon(pix);
 }

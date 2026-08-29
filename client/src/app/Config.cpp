@@ -115,8 +115,14 @@ QString Config::firebaseAppId()
 
 QString Config::sparkleFeedUrl()
 {
-    return envOrPlist("SEENSHOT_SPARKLE_FEED", "sparkleFeedUrl",
-                      QStringLiteral("https://updates.seenshot.com/appcast.xml"));
+    // ─── Ariadne's Thread [AT-0364] ─────────────────────
+    // What: Read Sparkle feed from SUFeedURL, default seenshot.app/appcast.xml
+    // Why:  Updates use the same canonical host as the website
+    // Date: 2026-08-28
+    // Related: [AT-0364] packaging/macos/Info.plist:SUFeedURL, [AT-0005] Config.cpp:envOrPlist, https://sparkle-project.org/documentation/publishing/
+    // ─────────────────────────────────────────────────────
+    return envOrPlist("SEENSHOT_SPARKLE_FEED", "SUFeedURL",
+                      QStringLiteral("https://seenshot.app/appcast.xml"));
 }
 
 // ─── Ariadne's Thread [AT-0086] ─────────────────────

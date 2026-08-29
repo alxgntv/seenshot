@@ -529,6 +529,39 @@ void ChangeTextWidthCommand::redo()
     }
 }
 
+// ─── Ariadne's Thread [AT-0351] ─────────────────────
+// What: Undo/redo extra text box height with the existing Resize text macro
+// Why:  Width-only ChangeTextWidthCommand could not restore a down/diagonal stretch
+// Date: 2026-08-28
+// Related: [AT-0156] AnnotateWindow.cpp:commitSelectGesture, [AT-0348] AnnotateItems.cpp:setBoxHeight
+// ─────────────────────────────────────────────────────
+ChangeTextHeightCommand::ChangeTextHeightCommand(AnnotateTextItem *item, qreal oldHeight, qreal newHeight,
+                                                 QUndoCommand *parent)
+    : QUndoCommand(parent)
+    , m_item(item)
+    , m_old(oldHeight)
+    , m_new(newHeight)
+{
+    setText(QStringLiteral("Resize text"));
+    qInfo() << "ChangeTextHeightCommand: construct" << m_old << "->" << m_new;
+}
+
+void ChangeTextHeightCommand::undo()
+{
+    qInfo() << "ChangeTextHeightCommand: undo" << m_old;
+    if (m_item) {
+        m_item->setBoxHeight(m_old);
+    }
+}
+
+void ChangeTextHeightCommand::redo()
+{
+    qInfo() << "ChangeTextHeightCommand: redo" << m_new;
+    if (m_item) {
+        m_item->setBoxHeight(m_new);
+    }
+}
+
 ChangePhotoPosCommand::ChangePhotoPosCommand(QGraphicsItem *item, const QPointF &oldPos, const QPointF &newPos,
                                              int gestureId, QUndoCommand *parent)
     : QUndoCommand(parent)

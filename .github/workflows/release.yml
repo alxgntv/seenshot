@@ -1,6 +1,6 @@
 # ─── Ariadne's Thread [AT-0121] ─────────────────────
 # What: Tag v* builds a notarized zip and publishes Sparkle appcast
-# Why:  Users update from updates.seenshot.com, not from git
+# Why:  Users update from seenshot.app/appcast.xml, not from git
 # Date: 2026-08-26
 # Related: [AT-0120] packaging/macos/package_sparkle.sh, docs/PRD-05-auto-update.md
 # ─────────────────────────────────────────────────────

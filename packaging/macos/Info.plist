@@ -23,9 +23,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.7</string>
+	<string>0.1.8</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.7</string>
+	<string>0.1.8</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -38,8 +38,14 @@
 	<string>SeenShot uses the camera so you can place a photo of yourself on the screenshot.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>SeenShot captures a region of your screen so you can annotate and share a screenshot.</string>
+	<!-- ─── Ariadne's Thread [AT-0364] ─────────────────────
+	  What: Point SUFeedURL at https://seenshot.app/appcast.xml
+	  Why:  Sparkle must use the same canonical host as the site
+	  Date: 2026-08-28
+	  Related: [AT-0364] app→Config.cpp:sparkleFeedUrl, [AT-0364] seenshot-web→src/index.ts:proxySparkleAppcast, https://sparkle-project.org/documentation/publishing/
+	─────────────────────────────────────────────────────── -->
 	<key>SUFeedURL</key>
-	<string>https://updates.seenshot.com/appcast.xml</string>
+	<string>https://seenshot.app/appcast.xml</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUPublicEDKey</key>

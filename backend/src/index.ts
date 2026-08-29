@@ -151,10 +151,10 @@ async function serveShare(url: URL, env: Env): Promise<Response> {
   const row = banned
     ? null
     : await env.DB.prepare(
-        "SELECT shot_id FROM shots WHERE visibility = 'public' AND (public_id = ? OR shot_id = ?)",
+        "SELECT shot_id, visibility FROM shots WHERE (visibility = 'public' OR visibility = 'unavailable') AND (public_id = ? OR shot_id = ?)",
       )
         .bind(id, id)
-        .first();
+        .first<{ shot_id: string; visibility: string }>();
   // ─── Ariadne's Thread [AT-0208] ─────────────────────
   // What: Load the share PNG from seenshot.app/public/{id}.png
   // Why:  Apex is the site Worker; R2 keys stay public/{id}.png, not r2.dev
@@ -162,17 +162,27 @@ async function serveShare(url: URL, env: Env): Promise<Response> {
   // Related: [AT-0167] backend/wrangler.toml, [AT-0050] seenshot-web→src/index.ts:publicPng
   // ─────────────────────────────────────────────────────
   const imageUrl = `${env.R2_PUBLIC_BASE_URL}/public/${id}.png`;
-  console.log(`index: share imageUrl=${imageUrl} r2PublicBase=${env.R2_PUBLIC_BASE_URL} id=${id}`);
+  const unavailable = row?.visibility === "unavailable";
+  console.log(
+    `index: share imageUrl=${imageUrl} r2PublicBase=${env.R2_PUBLIC_BASE_URL} id=${id}` +
+      ` missing=${!row} unavailable=${unavailable} banned=${Boolean(banned)}`,
+  );
   const html = sharePage({
     publicId: id,
     imageUrl,
     missing: !row,
+    unavailable,
     abuseEmail: env.ABUSE_EMAIL,
   });
-  console.log(`index: share prefix=${prefix} id=${id} missing=${!row} banned=${Boolean(banned)}`);
+  console.log(
+    `index: share prefix=${prefix} id=${id} missing=${!row} unavailable=${unavailable} banned=${Boolean(banned)}`,
+  );
   return new Response(html, {
     status: row ? 200 : 404,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=60" },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": unavailable || !row ? "no-store" : "public, max-age=60",
+    },
   });
 }
 

@@ -11,8 +11,10 @@
 #include <QMainWindow>
 #include <QPoint>
 #include <QPointF>
+#include <QPointer>
 #include <QRect>
 #include <QRectF>
+#include <QString>
 
 class QAction;
 class QActionGroup;
@@ -82,6 +84,7 @@ public:
     bool viewMove(QMouseEvent *event, const QPointF &scenePos);
     bool viewRelease(QMouseEvent *event, const QPointF &scenePos);
     bool viewKeyPress(QKeyEvent *event);
+    void paintShotBorder(QPainter *painter) const;
     void paintSelectHandles(QPainter *painter) const;
 
 public slots:
@@ -95,6 +98,7 @@ protected:
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void moveEvent(QMoveEvent *event) override;
+    void changeEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
@@ -117,6 +121,9 @@ private slots:
     void onFillPressed();
     void onFillChanged(int percent);
     void onFillReleased();
+    void onBlurRadiusPressed();
+    void onBlurRadiusChanged(int radius);
+    void onBlurRadiusReleased();
     void onTextSizePressed();
     void onTextSizeChanged(int size);
     void onTextSizeReleased();
@@ -130,6 +137,10 @@ private slots:
     void onPhotoStillReady(const QImage &image);
     void onPhotoStillFailed(const QString &code);
     void onPhotoCountdownTick();
+    void copyExportedImageToClipboard(QWidget *anchor, const QString &agentName);
+    void showCopyHint(QWidget *anchor, const QString &text);
+    void hideCopyHint();
+    void layoutCopyHint();
 
 private:
     void onSceneMoved(const QPointF &pos);
@@ -140,7 +151,9 @@ private:
     QGraphicsItem *lastTextSizedItem() const;
     bool isSquareOrStepsItem(const QGraphicsItem *item) const;
     void updateStrokeFillVisibility();
-    void updateTextSizeLabel();
+    void updateBlurSliderVisibility();
+    void updateTextSizeVisibility();
+    QRectF clipDraftToShot(const QPointF &from, const QPointF &to) const;
     AnnotateTextItem *textItemAt(const QPointF &scenePos) const;
     AnnotatePhotoItem *photoItemAt(const QPointF &scenePos) const;
     QGraphicsItem *annotationItemAt(const QPointF &scenePos) const;
@@ -201,7 +214,7 @@ private:
     void layoutPhotoOverlay();
     HighlightStyle currentHighlightStyle() const;
     void beginNewText(const QPointF &scenePos);
-    void beginEditText(AnnotateTextItem *item, bool draft);
+    void beginEditText(AnnotateTextItem *item, bool draft, const QPointF &scenePos);
     void beginFillTextCaption(QGraphicsRectItem *rect);
     void commitTextEdit();
     QRectF shotRect() const;
@@ -211,6 +224,7 @@ private:
     void layoutToolsBar();
     void fitShotToWindow();
     void applyCanvasChrome();
+    void applyAnnotateChromeTheme();
     QRectF canvasRect() const;
     QImage shotImage() const;
     bool hasBackground() const;
@@ -240,8 +254,10 @@ private:
     QAction *m_fillLabelAction = nullptr;
     QAction *m_fillAction = nullptr;
     QSlider *m_textSizeSlider = nullptr;
-    QLabel *m_textSizeValue = nullptr;
+    QLabel *m_textSizeLabel = nullptr;
     QCheckBox *m_textOutlineBox = nullptr;
+    QFrame *m_textGroup = nullptr;
+    QToolButton *m_textButton = nullptr;
     QToolButton *m_bgButton = nullptr;
     QActionGroup *m_bgGroup = nullptr;
     int m_bgPreset = 0;
@@ -253,6 +269,9 @@ private:
     QAction *m_lineAction = nullptr;
     QAction *m_textToolAction = nullptr;
     QAction *m_blurAction = nullptr;
+    QToolButton *m_blurButton = nullptr;
+    QSlider *m_blurSlider = nullptr;
+    QAction *m_blurSliderAction = nullptr;
     QLabel *m_radiusLabel = nullptr;
     QSlider *m_radius = nullptr;
     QLabel *m_shadowLabel = nullptr;
@@ -279,6 +298,7 @@ private:
     AnnotateTextItem *m_editingText = nullptr;
     QString m_editOldText;
     bool m_textDraft = false;
+    bool m_textViewMouse = false;
     QGraphicsRectItem *m_fillTextRect = nullptr;
     AnnotateTextItem *m_resizingText = nullptr;
     qreal m_resizeOldWidth = 0;
@@ -290,6 +310,8 @@ private:
     bool m_strokeGestureActive = false;
     int m_fillGestureId = 0;
     bool m_fillGestureActive = false;
+    int m_blurGestureId = 0;
+    bool m_blurGestureActive = false;
     int m_textSizeGestureId = 0;
     bool m_textSizeGestureActive = false;
     bool m_didScreenLayout = false;
@@ -303,6 +325,10 @@ private:
     QPushButton *m_photoPictureButton = nullptr;
     QPushButton *m_photoTimer5Button = nullptr;
     QLabel *m_photoChoiceCount = nullptr;
+    QFrame *m_copyHint = nullptr;
+    QLabel *m_copyHintLabel = nullptr;
+    QTimer *m_copyHintTimer = nullptr;
+    QPointer<QWidget> m_copyHintAnchor;
     QWidget *m_photoOverlay = nullptr;
     QLabel *m_photoCountdown = nullptr;
     QWidget *m_photoFlash = nullptr;
@@ -332,6 +358,7 @@ private:
     QPointF m_selectPressScene;
     QPointF m_selectOldPos;
     qreal m_selectOldWidth = 160;
+    qreal m_selectOldHeight = 0;
     QRectF m_selectOldRect;
     QPointF m_selectOldP1;
     QPointF m_selectOldP2;
@@ -343,6 +370,7 @@ private:
     QProgressBar *m_updateBar = nullptr;
     QLabel *m_updateStatus = nullptr;
     QPushButton *m_shareBtn = nullptr;
+    QPushButton *m_saveBtn = nullptr;
     QProgressBar *m_shareBusy = nullptr;
     QProgressBar *m_shareProgress = nullptr;
     bool m_shareUploading = false;

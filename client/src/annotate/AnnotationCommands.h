@@ -235,5 +235,19 @@ private:
     qreal m_new = 0;
 };
 
+class AnnotateTextItem;
+
+class ChangeTextHeightCommand : public QUndoCommand {
+public:
+    ChangeTextHeightCommand(AnnotateTextItem *item, qreal oldHeight, qreal newHeight, QUndoCommand *parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    AnnotateTextItem *m_item = nullptr;
+    qreal m_old = 0;
+    qreal m_new = 0;
+};
+
 void applyItemColor(QGraphicsItem *item, const QColor &color);
 QColor itemColor(QGraphicsItem *item);

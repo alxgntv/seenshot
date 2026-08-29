@@ -22,6 +22,7 @@ constexpr int kAnnotateRoleP1 = 39;
 constexpr int kAnnotateRoleP2 = 40;
 constexpr int kAnnotateRoleTextSize = 41;
 constexpr int kAnnotateRoleTextOutline = 42;
+constexpr int kAnnotateRoleTextHeight = 43;
 
 enum class AnnotateKind {
     None = 0,
@@ -86,7 +87,10 @@ public:
     QPainterPath shape() const override;
     bool isResizeHandle(const QPointF &itemPos) const;
     qreal minTextWidth() const;
-    void beginEdit();
+    qreal minTextHeight() const;
+    void setBoxHeight(qreal height);
+    qreal boxHeight() const;
+    void beginEdit(const QPointF &itemPos);
     void endEdit();
     bool isEditing() const;
     void setTextSize(int size);
@@ -104,6 +108,7 @@ private:
     QPainterPath stickerGlyphPath() const;
     int m_textSize = 18;
     bool m_textOutline = false;
+    qreal m_boxHeight = 0;
 };
 
 // ─── Ariadne's Thread [AT-0041] ─────────────────────

@@ -18,7 +18,12 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QSignalBlocker>
+#include <QBuffer>
+#include <QByteArray>
 #include <QBrush>
+#include <QClipboard>
+#include <QIODevice>
+#include <QMimeData>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QPointer>
@@ -70,10 +75,12 @@
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QSlider>
+#include <QStyleHints>
 #include <QWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTimer>
+#include <QTextCursor>
 #include <QToolBar>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -284,6 +291,7 @@ protected:
     void drawForeground(QPainter *painter, const QRectF &rect) override
     {
         QGraphicsView::drawForeground(painter, rect);
+        m_host->paintShotBorder(painter);
         m_host->paintSelectHandles(painter);
     }
 
@@ -322,6 +330,38 @@ QPushButton *makeNativeToolbarButton(const QString &title, bool isDefault)
     btn->setFocusPolicy(Qt::NoFocus);
     qInfo() << "makeNativeToolbarButton:" << title << "default=" << isDefault;
     return btn;
+}
+
+void styleGrayToolbarButton(QPushButton *btn, bool darkChrome)
+{
+    if (!btn) {
+        qWarning() << "styleGrayToolbarButton: null";
+        return;
+    }
+    if (darkChrome) {
+        btn->setAttribute(Qt::WA_StyledBackground, true);
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            " background-color: #ffffff;"
+            " color: #000000;"
+            " border: none;"
+            " border-radius: 6px;"
+            " padding: 4px 10px;"
+            "}"
+            "QPushButton:pressed {"
+            " background-color: #e5e5ea;"
+            " color: #000000;"
+            "}"
+            "QPushButton:disabled {"
+            " background-color: #ffffff;"
+            " color: #8e8e93;"
+            "}"));
+    } else {
+        btn->setAttribute(Qt::WA_StyledBackground, false);
+        btn->setStyleSheet(QString());
+    }
+    qInfo() << "styleGrayToolbarButton title=" << btn->text() << "darkChrome=" << darkChrome
+            << "styled=" << darkChrome;
 }
 
 QGraphicsLineItem *makeLine(const QPointF &from, const QPointF &to, const QColor &color)
@@ -461,10 +501,103 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
                  &AnnotateWindow::setToolArrow);
     addCheckable(m_lineAction, QStringLiteral("line.diagonal"), QStringLiteral("Line"),
                  &AnnotateWindow::setToolLine);
-    addCheckable(m_textToolAction, QStringLiteral("textformat"), QStringLiteral("Text"),
-                 &AnnotateWindow::setToolText);
-    addCheckable(m_blurAction, QStringLiteral("circle.lefthalf.filled"), QStringLiteral("Blur"),
-                 &AnnotateWindow::setToolBlur);
+    // ─── Ariadne's Thread [AT-0345] ─────────────────────
+    // What: Text, Size, and Outline share one gray toolbar pad when text is selected
+    // Why:  Size and Outline sat outside the Aa selected background
+    // Date: 2026-08-28
+    // Related: [AT-0334] AnnotateWindow.cpp:updateTextSizeVisibility, [AT-0344] AnnotateWindow.cpp:m_textOutlineBox
+    // ─────────────────────────────────────────────────────
+    m_textToolAction = new QAction(macToolbarIcon(QStringLiteral("textformat"), toolTint),
+                                   QStringLiteral("Text"), this);
+    m_textToolAction->setCheckable(true);
+    m_textToolAction->setToolTip(QStringLiteral("Text"));
+    m_toolGroup->addAction(m_textToolAction);
+    connect(m_textToolAction, &QAction::triggered, this, &AnnotateWindow::setToolText);
+    m_textGroup = new QFrame(toolbar);
+    m_textGroup->setObjectName(QStringLiteral("TextGroup"));
+    m_textGroup->setAttribute(Qt::WA_StyledBackground, true);
+    m_textGroup->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    auto *textGroupLay = new QHBoxLayout(m_textGroup);
+    textGroupLay->setContentsMargins(0, 0, 0, 0);
+    textGroupLay->setSpacing(4);
+    m_textButton = new QToolButton(m_textGroup);
+    m_textButton->setDefaultAction(m_textToolAction);
+    m_textButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_textButton->setFocusPolicy(Qt::NoFocus);
+    m_textButton->setIconSize(QSize(16, 16));
+    m_textButton->setToolTip(QStringLiteral("Text"));
+    m_textButton->setAccessibleName(QStringLiteral("Text"));
+    m_textSizeLabel = new QLabel(QStringLiteral("Size"), m_textGroup);
+    m_textSizeSlider = new QSlider(Qt::Horizontal, m_textGroup);
+    m_textSizeSlider->setRange(10, 48);
+    m_textSizeSlider->setValue(m_textSize);
+    m_textSizeSlider->setFixedWidth(40);
+    m_textSizeSlider->setToolTip(QStringLiteral("Text size"));
+    m_textSizeSlider->setAccessibleName(QStringLiteral("Text size"));
+    m_textSizeSlider->setFocusPolicy(Qt::NoFocus);
+    connect(m_textSizeSlider, &QSlider::sliderPressed, this, &AnnotateWindow::onTextSizePressed);
+    connect(m_textSizeSlider, &QSlider::valueChanged, this, &AnnotateWindow::onTextSizeChanged);
+    connect(m_textSizeSlider, &QSlider::sliderReleased, this, &AnnotateWindow::onTextSizeReleased);
+    m_textOutlineBox = new QCheckBox(QStringLiteral("Outline"), m_textGroup);
+    m_textOutlineBox->setChecked(m_textOutline);
+    m_textOutlineBox->setToolTip(QStringLiteral("Text outline"));
+    m_textOutlineBox->setAccessibleName(QStringLiteral("Text outline"));
+    m_textOutlineBox->setFocusPolicy(Qt::NoFocus);
+    connect(m_textOutlineBox, &QCheckBox::toggled, this, &AnnotateWindow::onTextOutlineToggled);
+    textGroupLay->addWidget(m_textButton);
+    textGroupLay->addWidget(m_textSizeLabel);
+    textGroupLay->addWidget(m_textSizeSlider);
+    textGroupLay->addWidget(m_textOutlineBox);
+    m_textSizeLabel->hide();
+    m_textSizeSlider->hide();
+    m_textOutlineBox->hide();
+    toolbar->addWidget(m_textGroup);
+    qInfo() << "AnnotateWindow: Text group Aa+Size+Outline iconNull=" << m_textButton->icon().isNull()
+            << "outline=" << m_textOutline;
+    // ─── Ariadne's Thread [AT-0338] ─────────────────────
+    // What: Blur is one QToolButton, icon then text, same as Background
+    // Why:  Separate QLabel sat on the left and did not share the click with the icon
+    // Date: 2026-08-28
+    // Related: [AT-0131] AnnotateWindow.cpp:m_bgButton, [AT-0337] AnnotateWindow.cpp:blurLabel
+    // ─────────────────────────────────────────────────────
+    m_blurAction = new QAction(macToolbarIcon(QStringLiteral("circle.lefthalf.filled"), toolTint),
+                               QStringLiteral("Blur"), this);
+    m_blurAction->setCheckable(true);
+    m_blurAction->setToolTip(QStringLiteral("Blur"));
+    m_toolGroup->addAction(m_blurAction);
+    connect(m_blurAction, &QAction::triggered, this, &AnnotateWindow::setToolBlur);
+    m_blurButton = new QToolButton(toolbar);
+    m_blurButton->setObjectName(QStringLiteral("BgPreset"));
+    m_blurButton->setDefaultAction(m_blurAction);
+    m_blurButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_blurButton->setFocusPolicy(Qt::NoFocus);
+    m_blurButton->setIconSize(QSize(16, 16));
+    m_blurButton->setToolTip(QStringLiteral("Blur"));
+    m_blurButton->setAccessibleName(QStringLiteral("Blur"));
+    toolbar->addWidget(m_blurButton);
+    qInfo() << "AnnotateWindow: Blur text+icon button style=" << m_blurButton->toolButtonStyle()
+            << "text=" << m_blurButton->text() << "iconNull=" << m_blurButton->icon().isNull()
+            << "checkable=" << m_blurButton->isCheckable();
+    // ─── Ariadne's Thread [AT-0341] ─────────────────────
+    // What: Blur QSlider sits on the bar immediately right of the Blur button
+    // Why:  Overlay under the icon sat off the bar; Size already uses this slot
+    // Date: 2026-08-28
+    // Related: [AT-0330] AnnotateWindow.cpp:m_blurSlider, [AT-0333] AnnotateWindow.cpp:m_textSizeSlider
+    // ─────────────────────────────────────────────────────
+    m_blurSlider = new QSlider(Qt::Horizontal);
+    m_blurSlider->setRange(0, 20);
+    m_blurSlider->setValue(m_blurRadius);
+    m_blurSlider->setFixedWidth(40);
+    m_blurSlider->setToolTip(QStringLiteral("Blur"));
+    m_blurSlider->setAccessibleName(QStringLiteral("Blur"));
+    m_blurSlider->setFocusPolicy(Qt::NoFocus);
+    connect(m_blurSlider, &QSlider::sliderPressed, this, &AnnotateWindow::onBlurRadiusPressed);
+    connect(m_blurSlider, &QSlider::valueChanged, this, &AnnotateWindow::onBlurRadiusChanged);
+    connect(m_blurSlider, &QSlider::sliderReleased, this, &AnnotateWindow::onBlurRadiusReleased);
+    m_blurSliderAction = toolbar->addWidget(m_blurSlider);
+    m_blurSliderAction->setVisible(false);
+    m_blurSlider->hide();
+    qInfo() << "AnnotateWindow: blur slider after Blur button radius=" << m_blurRadius;
     // ─── Ariadne's Thread [AT-0127] ─────────────────────
     // What: Photo toolbar button is checkable: press on opens pip, press off stops camera
     // Why:  MenuButtonPopup second click opened Picture/5s and could not turn the pip off
@@ -512,6 +645,40 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     connect(m_photoTimer5Button, &QPushButton::clicked, this, &AnnotateWindow::startPhotoTimer5);
     m_photoChoice->hide();
     qInfo() << "AnnotateWindow: Photo choice card created";
+    // ─── Ariadne's Thread [AT-0379] ─────────────────────
+    // What: Copy-success hint is the same QFrame chrome as Photo choice under the agent icon
+    // Why:  QToolTip was the system gray box and sat under Save instead of the clicked agent
+    // Date: 2026-08-29
+    // Related: [AT-0165] AnnotateWindow.cpp:m_photoChoice, [AT-0372] AnnotateWindow.cpp:copyExportedImageToClipboard
+    // ─────────────────────────────────────────────────────
+    m_copyHint = new QFrame(this);
+    m_copyHint->setObjectName(QStringLiteral("CopyHint"));
+    m_copyHint->setFrameShape(QFrame::StyledPanel);
+    m_copyHint->setAttribute(Qt::WA_StyledBackground, true);
+    m_copyHint->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_copyHint->setStyleSheet(QStringLiteral(
+        "#CopyHint { background: #2c2c2e; border: 1px solid #6e6e73; border-radius: 12px; }"
+        "#CopyHint QLabel { color: #f2f2f7; background: transparent; font-size: 13px; }"));
+    auto *copyHintLay = new QHBoxLayout(m_copyHint);
+    copyHintLay->setContentsMargins(12, 8, 12, 8);
+    copyHintLay->setSpacing(0);
+    m_copyHintLabel = new QLabel(m_copyHint);
+    m_copyHintLabel->setAlignment(Qt::AlignCenter);
+    m_copyHintLabel->setWordWrap(false);
+    copyHintLay->addWidget(m_copyHintLabel);
+    auto *copyHintShadow = new QGraphicsDropShadowEffect(m_copyHint);
+    copyHintShadow->setBlurRadius(22);
+    copyHintShadow->setOffset(0, 4);
+    copyHintShadow->setColor(QColor(0, 0, 0, 150));
+    m_copyHint->setGraphicsEffect(copyHintShadow);
+    m_copyHint->hide();
+    m_copyHintTimer = new QTimer(this);
+    m_copyHintTimer->setSingleShot(true);
+    connect(m_copyHintTimer, &QTimer::timeout, this, [this]() {
+        qInfo() << "AnnotateWindow: copy hint timeout";
+        hideCopyHint();
+    });
+    qInfo() << "AnnotateWindow: copy hint card created";
     m_highlightAction->setChecked(true);
     toolbar->addSeparator();
     m_undoAction = toolbar->addAction(macToolbarIcon(QStringLiteral("arrow.uturn.backward"), toolTint),
@@ -524,6 +691,14 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_redoAction->setShortcut(QKeySequence::Redo);
     qInfo() << "AnnotateWindow: action icons Undo=" << !m_undoAction->icon().isNull()
             << "Redo=" << !m_redoAction->icon().isNull();
+    // ─── Ariadne's Thread [AT-0371] ─────────────────────
+    // What: QToolBar separator after Redo
+    // Why:  Undo/Redo sat flush against Color without a trailing divider
+    // Date: 2026-08-28
+    // Related: [AT-0072] AnnotateWindow.cpp:undo, [AT-0370] AnnotateWindow.cpp:m_toolsBar
+    // ─────────────────────────────────────────────────────
+    toolbar->addSeparator();
+    qInfo() << "AnnotateWindow: Redo trailing separator";
 
     // ─── Ariadne's Thread [AT-0071] ─────────────────────
     // What: Restore slider QLabel text; Save/Share Link are native QPushButton
@@ -608,6 +783,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_stroke->setFixedWidth(40);
     m_stroke->setToolTip(QStringLiteral("Stroke"));
     m_stroke->setAccessibleName(QStringLiteral("Stroke"));
+    m_stroke->setFocusPolicy(Qt::NoFocus);
     connect(m_stroke, &QSlider::sliderPressed, this, &AnnotateWindow::onStrokePressed);
     connect(m_stroke, &QSlider::valueChanged, this, &AnnotateWindow::onStrokeChanged);
     connect(m_stroke, &QSlider::sliderReleased, this, &AnnotateWindow::onStrokeReleased);
@@ -620,48 +796,13 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_fill->setFixedWidth(40);
     m_fill->setToolTip(QStringLiteral("Fill"));
     m_fill->setAccessibleName(QStringLiteral("Fill"));
+    m_fill->setFocusPolicy(Qt::NoFocus);
     connect(m_fill, &QSlider::sliderPressed, this, &AnnotateWindow::onFillPressed);
     connect(m_fill, &QSlider::valueChanged, this, &AnnotateWindow::onFillChanged);
     connect(m_fill, &QSlider::sliderReleased, this, &AnnotateWindow::onFillReleased);
     m_fillLabelAction = toolbar->addWidget(m_fillLabel);
     m_fillAction = toolbar->addWidget(m_fill);
     qInfo() << "AnnotateWindow: Stroke/Fill actions created, hidden until Square or Steps is current";
-    // ─── Ariadne's Thread [AT-0148] ─────────────────────
-    // What: Size slider plus Outline checkbox for last text or Steps digit
-    // Why:  One slider updates the last text block and the last numbered badge
-    // Date: 2026-08-26
-    // Related: [AT-0046] AnnotateWindow.cpp:onStrokeChanged, [AT-0041] AnnotateItems.h:StepBadgeItem
-    // ─────────────────────────────────────────────────────
-    auto *sizeLabel = new QLabel(QStringLiteral("Size"));
-    m_textSizeSlider = new QSlider(Qt::Horizontal);
-    m_textSizeSlider->setRange(10, 48);
-    m_textSizeSlider->setValue(m_textSize);
-    m_textSizeSlider->setFixedWidth(40);
-    m_textSizeSlider->setToolTip(QStringLiteral("Text size"));
-    m_textSizeSlider->setAccessibleName(QStringLiteral("Text size"));
-    m_textSizeValue = new QLabel(QString::number(m_textSize));
-    m_textSizeValue->setMinimumWidth(16);
-    m_textSizeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_textOutlineBox = new QCheckBox(QStringLiteral("Outline"));
-    m_textOutlineBox->setChecked(m_textOutline);
-    m_textOutlineBox->setToolTip(QStringLiteral("Text outline"));
-    m_textOutlineBox->setAccessibleName(QStringLiteral("Text outline"));
-    connect(m_textSizeSlider, &QSlider::sliderPressed, this, &AnnotateWindow::onTextSizePressed);
-    connect(m_textSizeSlider, &QSlider::valueChanged, this, &AnnotateWindow::onTextSizeChanged);
-    connect(m_textSizeSlider, &QSlider::sliderReleased, this, &AnnotateWindow::onTextSizeReleased);
-    connect(m_textOutlineBox, &QCheckBox::toggled, this, &AnnotateWindow::onTextOutlineToggled);
-    toolbar->addWidget(sizeLabel);
-    toolbar->addWidget(m_textSizeSlider);
-    toolbar->addWidget(m_textSizeValue);
-    toolbar->addWidget(m_textOutlineBox);
-    qInfo() << "AnnotateWindow: text size slider=" << m_textSize << "outline=" << m_textOutline;
-    // ─── Ariadne's Thread [AT-0078] ─────────────────────
-    // What: Remove Amount slider from the annotate toolbar
-    // Why:  Blur keeps the existing default radius; the Amount control is gone
-    // Date: 2026-08-25
-    // Related: [AT-0047] AnnotateWindow.cpp:onAmountChanged
-    // ─────────────────────────────────────────────────────
-    qInfo() << "AnnotateWindow: Amount slider omitted, blur radius=" << m_blurRadius;
     // ─── Ariadne's Thread [AT-0073] ─────────────────────
     // What: Background is a QToolButton whose InstantPopup menu is a column of circles
     // Why:  QComboBox text list hid the gradient presets; each circle is one existing preset
@@ -745,6 +886,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_radius->setFixedWidth(40);
     m_radius->setToolTip(QStringLiteral("Radius"));
     m_radius->setAccessibleName(QStringLiteral("Radius"));
+    m_radius->setFocusPolicy(Qt::NoFocus);
     connect(m_radius, &QSlider::valueChanged, this, &AnnotateWindow::onRadiusChanged);
     m_radiusLabelAction = toolbar->addWidget(m_radiusLabel);
     m_radiusAction = toolbar->addWidget(m_radius);
@@ -755,6 +897,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_shadow->setFixedWidth(40);
     m_shadow->setToolTip(QStringLiteral("Shadow"));
     m_shadow->setAccessibleName(QStringLiteral("Shadow"));
+    m_shadow->setFocusPolicy(Qt::NoFocus);
     connect(m_shadow, &QSlider::valueChanged, this, &AnnotateWindow::onShadowChanged);
     m_shadowLabelAction = toolbar->addWidget(m_shadowLabel);
     m_shadowAction = toolbar->addWidget(m_shadow);
@@ -763,6 +906,52 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     spacer->setMinimumWidth(0);
     toolbar->addWidget(spacer);
+    // ─── Ariadne's Thread [AT-0368] ─────────────────────
+    // What: Separator then Claude/Cursor/Codex/OpenCode copy the exported screenshot
+    // Why:  Paste the full annotated image into Cursor, VS Code, Claude, and other chats
+    // Date: 2026-08-28
+    // Related: [AT-0368] MacIcons.mm:macResourceIcon, [AT-0076] AnnotateWindow.cpp:exportedImage
+    // ─────────────────────────────────────────────────────
+    toolbar->addSeparator();
+    const struct {
+        const char *file;
+        const char *name;
+    } agents[] = {{"claude.svg", "Claude"},
+                   {"cursor.svg", "Cursor"},
+                   {"codex.svg", "Codex"},
+                   {"opencode.svg", "OpenCode"}};
+    for (const auto &agent : agents) {
+        auto *btn = new QToolButton(toolbar);
+        btn->setIcon(macResourceIcon(QString::fromUtf8(agent.file)));
+        btn->setIconSize(QSize(16, 16));
+        btn->setAccessibleName(QString::fromUtf8(agent.name));
+        btn->setFocusPolicy(Qt::NoFocus);
+        btn->setCheckable(false);
+        btn->setAutoRaise(true);
+        const QString agentName = QString::fromUtf8(agent.name);
+        // ─── Ariadne's Thread [AT-0372] ─────────────────────
+        // What: Pass the clicked agent button into copy so the hint can sit under it
+        // Why:  Hint must be under this icon, not under Save
+        // Date: 2026-08-29
+        // Related: [AT-0379] AnnotateWindow.cpp:showCopyHint, [AT-0368] AnnotateWindow.cpp:m_toolsBar
+        // ─────────────────────────────────────────────────────
+        connect(btn, &QToolButton::clicked, this, [this, agentName, btn]() {
+            qInfo() << "AnnotateWindow: agent copy click name=" << agentName
+                    << "btn=" << static_cast<void *>(btn) << "size=" << btn->size();
+            copyExportedImageToClipboard(btn, agentName);
+        });
+        toolbar->addWidget(btn);
+        qInfo() << "AnnotateWindow: agent button" << agent.name
+                << "iconNull=" << btn->icon().isNull() << "file=" << agent.file;
+    }
+    // ─── Ariadne's Thread [AT-0370] ─────────────────────
+    // What: Trailing QToolBar separator after the agent copy icons
+    // Why:  Agents sat flush against Save without a divider on the right
+    // Date: 2026-08-28
+    // Related: [AT-0368] AnnotateWindow.cpp:copyExportedImageToClipboard, [AT-0150] AnnotateWindow.cpp:m_toolsBar
+    // ─────────────────────────────────────────────────────
+    toolbar->addSeparator();
+    qInfo() << "AnnotateWindow: agent icons trailing separator";
     // ─── Ariadne's Thread [AT-0311] ─────────────────────
     // What: Share Link is the default (blue) bezel; Save is the gray button
     // Why:  Share is the primary action; Save was drawing the accent by mistake
@@ -770,6 +959,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     // Related: [AT-0071] AnnotateWindow.cpp:makeNativeToolbarButton
     // ─────────────────────────────────────────────────────
     QPushButton *saveBtn = makeNativeToolbarButton(QStringLiteral("Save"), false);
+    m_saveBtn = saveBtn;
     m_shareBtn = makeNativeToolbarButton(QStringLiteral("Share Link"), true);
     qInfo() << "AnnotateWindow: Share Link default=true Save default=false";
     m_shareBtn->setMinimumWidth(m_shareBtn->sizeHint().width());
@@ -785,7 +975,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_shareProgress->setFixedWidth(88);
     m_shareProgress->setFixedHeight(16);
     m_shareProgress->hide();
-    connect(saveBtn, &QPushButton::clicked, this, &AnnotateWindow::saveLocal);
+    connect(m_saveBtn, &QPushButton::clicked, this, &AnnotateWindow::saveLocal);
     connect(m_shareBtn, &QPushButton::clicked, this, &AnnotateWindow::share);
     if (m_auth) {
         connect(m_auth, &AuthSession::websiteSignInSettled, this, &AnnotateWindow::onWebsiteSignInSettled);
@@ -793,7 +983,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     } else {
         qWarning() << "AnnotateWindow: no AuthSession, Share cannot start website sign-in";
     }
-    toolbar->addWidget(saveBtn);
+    toolbar->addWidget(m_saveBtn);
     toolbar->addWidget(m_shareProgress);
     toolbar->addWidget(m_shareBtn);
     qInfo() << "AnnotateWindow: slider labels on; Save/Share Link native QPushButton shareProgress=on";
@@ -840,6 +1030,14 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     updateStrokeFillVisibility();
     applyWindowScreenLayout();
     ensureUpdateCard();
+    if (QStyleHints *hints = QGuiApplication::styleHints()) {
+        connect(hints, &QStyleHints::colorSchemeChanged, this, [this](Qt::ColorScheme scheme) {
+            qInfo() << "AnnotateWindow: colorSchemeChanged scheme=" << static_cast<int>(scheme);
+            applyAnnotateChromeTheme();
+        });
+        qInfo() << "AnnotateWindow: watching colorScheme=" << static_cast<int>(hints->colorScheme());
+    }
+    applyAnnotateChromeTheme();
     qInfo() << "AnnotateWindow: opened" << m_source.width() << "x" << m_source.height();
 }
 
@@ -936,6 +1134,18 @@ void AnnotateWindow::moveEvent(QMoveEvent *event)
     QMainWindow::moveEvent(event);
     layoutPhotoOverlay();
     qInfo() << "AnnotateWindow: moveEvent" << event->pos();
+}
+
+void AnnotateWindow::changeEvent(QEvent *event)
+{
+    QMainWindow::changeEvent(event);
+    if (!event) {
+        return;
+    }
+    if (event->type() == QEvent::ThemeChange || event->type() == QEvent::PaletteChange) {
+        qInfo() << "AnnotateWindow: changeEvent type=" << static_cast<int>(event->type());
+        applyAnnotateChromeTheme();
+    }
 }
 
 void AnnotateWindow::undo()
@@ -1077,6 +1287,19 @@ QPointF AnnotateWindow::clampToShot(const QPointF &scenePos) const
     return QPointF(qBound(r.left(), scenePos.x(), r.right()), qBound(r.top(), scenePos.y(), r.bottom()));
 }
 
+// ─── Ariadne's Thread [AT-0329] ─────────────────────
+// What: Clip a drag rect to shotRect so outside press still paints only on the shot
+// Why:  Users start Square/Blur/Arrow/Line from the window chrome around the image
+// Date: 2026-08-28
+// Related: [AT-0328] AnnotateWindow.cpp:viewPress, [AT-0050] AnnotateWindow.cpp:shotRect
+// ─────────────────────────────────────────────────────
+QRectF AnnotateWindow::clipDraftToShot(const QPointF &from, const QPointF &to) const
+{
+    const QRectF shot = shotRect();
+    const QRectF box = QRectF(from, to).normalized().intersected(shot);
+    return box;
+}
+
 // ─── Ariadne's Thread [AT-0050] ─────────────────────
 // What: Annotate window 80% of available screen; shot 80% of window via view transform
 // Why:  Requested editor chrome; scene stays in image pixels for export
@@ -1119,6 +1342,7 @@ void AnnotateWindow::layoutToolsBar()
     m_toolsBar->show();
     qInfo() << "AnnotateWindow: tools bar geo=" << m_toolsBar->geometry() << "hint=" << hint << "windowW=" << width()
             << "overflow=" << (hint.width() > maxW);
+    layoutCopyHint();
 }
 
 void AnnotateWindow::fitShotToWindow()
@@ -1294,13 +1518,34 @@ void AnnotateWindow::onFillReleased()
     m_fillGestureActive = false;
 }
 
-void AnnotateWindow::updateTextSizeLabel()
+void AnnotateWindow::onBlurRadiusPressed()
 {
-    if (!m_textSizeValue) {
+    ++m_blurGestureId;
+    m_blurGestureActive = true;
+    qInfo() << "AnnotateWindow: blur radius gesture start id=" << m_blurGestureId;
+}
+
+void AnnotateWindow::onBlurRadiusChanged(int radius)
+{
+    m_blurRadius = qBound(0, radius, 20);
+    qInfo() << "AnnotateWindow: blur radius=" << m_blurRadius;
+    QGraphicsItem *item = selectedAnnotation();
+    if (!item || annotateKind(item) != AnnotateKind::Blur) {
+        qInfo() << "AnnotateWindow: blur slider skip, no selected blur";
         return;
     }
-    m_textSizeValue->setText(QString::number(m_textSize));
-    qInfo() << "AnnotateWindow: text size label=" << m_textSize;
+    if (blurRadius(item) == m_blurRadius) {
+        qInfo() << "AnnotateWindow: selected blur already this radius";
+        return;
+    }
+    const int gesture = m_blurGestureActive ? m_blurGestureId : ++m_blurGestureId;
+    m_undo->push(new ChangeBlurRadiusCommand(item, m_blurRadius, gesture));
+}
+
+void AnnotateWindow::onBlurRadiusReleased()
+{
+    qInfo() << "AnnotateWindow: blur radius gesture end id=" << m_blurGestureId;
+    m_blurGestureActive = false;
 }
 
 void AnnotateWindow::onTextSizePressed()
@@ -1313,7 +1558,6 @@ void AnnotateWindow::onTextSizePressed()
 void AnnotateWindow::onTextSizeChanged(int size)
 {
     m_textSize = qBound(10, size, 48);
-    updateTextSizeLabel();
     qInfo() << "AnnotateWindow: text size=" << m_textSize;
     QGraphicsItem *last = lastTextSizedItem();
     if (!last) {
@@ -1411,6 +1655,114 @@ bool AnnotateWindow::ensureOnlineSignedIn(QString *errorCode)
         return false;
     }
     return true;
+}
+
+// ─── Ariadne's Thread [AT-0368] ─────────────────────
+// What: Put the full exported screenshot on the pasteboard as PNG
+// Why:  Agent toolbar buttons paste the image into Cursor, VS Code, Claude chats
+// Date: 2026-08-28
+// Related: [AT-0076] AnnotateWindow.cpp:exportedImage, [AT-0368] MacIcons.mm:macResourceIcon
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString &agentName)
+{
+    commitTextEdit();
+    const QImage image = exportedImage();
+    if (image.isNull() || image.width() < 1 || image.height() < 1) {
+        qWarning() << "AnnotateWindow: copy screenshot skipped empty size=" << image.size()
+                   << "agent=" << agentName << "anchor=" << static_cast<void *>(anchor);
+        return;
+    }
+    QByteArray png;
+    QBuffer buffer(&png);
+    if (!buffer.open(QIODevice::WriteOnly)) {
+        qWarning() << "AnnotateWindow: copy screenshot buffer open failed size=" << image.size()
+                   << "agent=" << agentName;
+        return;
+    }
+    if (!image.save(&buffer, "PNG")) {
+        qWarning() << "AnnotateWindow: copy screenshot PNG encode failed size=" << image.size()
+                   << "agent=" << agentName;
+        return;
+    }
+    auto *mime = new QMimeData;
+    mime->setImageData(image);
+    mime->setData(QStringLiteral("image/png"), png);
+    QGuiApplication::clipboard()->setMimeData(mime);
+    const QString hint = QStringLiteral("Screenshot copied. Paste it in %1").arg(agentName);
+    qInfo() << "AnnotateWindow: copy screenshot pngBytes=" << png.size() << "size=" << image.size()
+            << "format=" << image.format() << "agent=" << agentName << "hint=" << hint
+            << "anchor=" << static_cast<void *>(anchor)
+            << "anchorSize=" << (anchor ? anchor->size() : QSize())
+            << "anchorVisible=" << (anchor && anchor->isVisible());
+    showCopyHint(anchor, hint);
+}
+
+// ─── Ariadne's Thread [AT-0379] ─────────────────────
+// What: Position the CopyHint QFrame under the clicked agent button
+// Why:  Same chrome as Photo choice; QToolTip was the system box under Save
+// Date: 2026-08-29
+// Related: [AT-0379] AnnotateWindow.cpp:m_copyHint, [AT-0165] AnnotateWindow.cpp:layoutPhotoChoice
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::showCopyHint(QWidget *anchor, const QString &text)
+{
+    if (!m_copyHint || !m_copyHintLabel || !m_copyHintTimer) {
+        qWarning() << "AnnotateWindow: copy hint skipped missing card text=" << text
+                   << "anchor=" << static_cast<void *>(anchor);
+        return;
+    }
+    if (!anchor) {
+        qWarning() << "AnnotateWindow: copy hint skipped null anchor text=" << text;
+        return;
+    }
+    m_copyHintAnchor = anchor;
+    m_copyHintLabel->setText(text);
+    m_copyHint->adjustSize();
+    m_copyHint->show();
+    layoutCopyHint();
+    m_copyHintTimer->start(4000);
+    qInfo() << "AnnotateWindow: copy hint shown text=" << text << "anchor=" << static_cast<void *>(anchor)
+            << "anchorSize=" << anchor->size() << "geo=" << m_copyHint->geometry()
+            << "timerMs=" << m_copyHintTimer->interval();
+}
+
+void AnnotateWindow::hideCopyHint()
+{
+    if (m_copyHintTimer) {
+        m_copyHintTimer->stop();
+    }
+    if (m_copyHint) {
+        m_copyHint->hide();
+    }
+    m_copyHintAnchor = nullptr;
+    qInfo() << "AnnotateWindow: copy hint hidden";
+}
+
+void AnnotateWindow::layoutCopyHint()
+{
+    if (!m_copyHint || !m_copyHint->isVisible()) {
+        return;
+    }
+    if (!m_copyHintAnchor) {
+        qWarning() << "AnnotateWindow: copy hint layout skipped missing anchor";
+        hideCopyHint();
+        return;
+    }
+    m_copyHint->adjustSize();
+    const QSize hint = m_copyHint->sizeHint();
+    const int w = qMax(1, hint.width());
+    const int h = qMax(1, hint.height());
+    const QPoint below = m_copyHintAnchor->mapTo(
+        this, QPoint(m_copyHintAnchor->width() / 2, m_copyHintAnchor->height() + 8));
+    const int pad = 8;
+    int x = below.x() - w / 2;
+    int y = below.y();
+    x = qBound(pad, x, qMax(pad, width() - w - pad));
+    y = qBound(pad, y, qMax(pad, height() - h - pad));
+    m_copyHint->setGeometry(x, y, w, h);
+    m_copyHint->raise();
+    qInfo() << "AnnotateWindow: copy hint geo=" << m_copyHint->geometry() << "below=" << below
+            << "anchorSize=" << m_copyHintAnchor->size() << "window=" << size() << "text="
+            << (m_copyHintLabel ? m_copyHintLabel->text() : QString());
 }
 
 void AnnotateWindow::saveLocal()
@@ -1897,9 +2249,145 @@ void AnnotateWindow::updateStrokeFillVisibility()
         m_fill->setVisible(on);
         m_fill->setEnabled(on);
     }
-    layoutToolsBar();
     qInfo() << "AnnotateWindow: Stroke/Fill visible=" << on
             << "kind=" << (item ? static_cast<int>(annotateKind(item)) : -1);
+    updateTextSizeVisibility();
+    updateBlurSliderVisibility();
+}
+
+// ─── Ariadne's Thread [AT-0331] ─────────────────────
+// What: Show the Blur slider only while a blur box is selected
+// Why:  Radius belongs to the selected blur square, not the idle toolbar
+// Date: 2026-08-28
+// Related: [AT-0330] AnnotateWindow.cpp:m_blurSlider, [AT-0157] AnnotateWindow.cpp:updateStrokeFillVisibility
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::updateBlurSliderVisibility()
+{
+    QGraphicsItem *item = selectedAnnotation();
+    const bool on = item && annotateKind(item) == AnnotateKind::Blur;
+    qInfo() << "AnnotateWindow: updateBlurSliderVisibility on=" << on
+            << "kind=" << (item ? static_cast<int>(annotateKind(item)) : -1);
+    if (m_blurSliderAction) {
+        m_blurSliderAction->setVisible(on);
+    }
+    if (!m_blurSlider) {
+        qWarning() << "AnnotateWindow: updateBlurSliderVisibility missing slider on=" << on;
+        layoutToolsBar();
+        return;
+    }
+    m_blurSlider->setVisible(on);
+    m_blurSlider->setEnabled(on);
+    if (on) {
+        const int radius = blurRadius(item);
+        QSignalBlocker block(m_blurSlider);
+        m_blurSlider->setValue(radius);
+        m_blurRadius = radius;
+        qInfo() << "AnnotateWindow: blur slider sync radius=" << radius;
+    }
+    layoutToolsBar();
+    qInfo() << "AnnotateWindow: blur slider visible=" << on << "action=" << (m_blurSliderAction != nullptr);
+}
+
+// ─── Ariadne's Thread [AT-0334] ─────────────────────
+// What: Show Size and Outline next to Text only while a text block is selected or editing
+// Why:  Idle toolbar Size/Outline were not tied to a text selection
+// Date: 2026-08-28
+// Related: [AT-0345] AnnotateWindow.cpp:m_textGroup, [AT-0344] AnnotateWindow.cpp:m_textOutlineBox
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::updateTextSizeVisibility()
+{
+    QGraphicsItem *item = selectedAnnotation();
+    AnnotateTextItem *caption = nullptr;
+    if (item && annotateKind(item) == AnnotateKind::Highlight
+        && highlightStyle(item) == HighlightStyle::FillText) {
+        for (QGraphicsItem *child : item->childItems()) {
+            caption = qgraphicsitem_cast<AnnotateTextItem *>(child);
+            if (caption) {
+                break;
+            }
+        }
+    }
+    const bool on = (m_editingText != nullptr)
+                    || (item && annotateKind(item) == AnnotateKind::Text)
+                    || (caption != nullptr);
+    qInfo() << "AnnotateWindow: updateTextSizeVisibility on=" << on
+            << "editing=" << (m_editingText != nullptr)
+            << "kind=" << (item ? static_cast<int>(annotateKind(item)) : -1)
+            << "fillTextCaption=" << (caption != nullptr)
+            << "group=" << (m_textGroup != nullptr);
+    if (m_textSizeLabel) {
+        m_textSizeLabel->setVisible(on);
+        m_textSizeLabel->setEnabled(on);
+    }
+    if (m_textSizeSlider) {
+        m_textSizeSlider->setVisible(on);
+        m_textSizeSlider->setEnabled(on);
+    } else {
+        qWarning() << "AnnotateWindow: updateTextSizeVisibility missing slider on=" << on;
+    }
+    if (m_textOutlineBox) {
+        m_textOutlineBox->setVisible(on);
+        m_textOutlineBox->setEnabled(on);
+        qInfo() << "AnnotateWindow: Outline visible=" << on << "checked=" << m_textOutlineBox->isChecked();
+    } else {
+        qWarning() << "AnnotateWindow: updateTextSizeVisibility missing Outline box on=" << on;
+    }
+    if (m_textGroup) {
+        if (auto *lay = m_textGroup->layout()) {
+            const int padLeft = on ? 6 : 0;
+            const int padRight = on ? 14 : 0;
+            lay->setContentsMargins(padLeft, 0, padRight, 0);
+            qInfo() << "AnnotateWindow: Text group margins left=" << padLeft << "right=" << padRight;
+        }
+        if (on) {
+            // ─── Ariadne's Thread [AT-0353] ─────────────────────
+            // What: Extra right padding after the Outline checkbox label
+            // Why:  QCheckBox padding 0 plus 6px group margin left the label flush with the pad
+            // Date: 2026-08-28
+            // Related: [AT-0346] AnnotateWindow.cpp:updateTextSizeVisibility, [AT-0345] AnnotateWindow.cpp:m_textGroup
+            // ─────────────────────────────────────────────────────
+            m_textGroup->setStyleSheet(QStringLiteral(
+                "QFrame#TextGroup { background: #3a3a3c; border: none; border-radius: 6px; }"
+                "QFrame#TextGroup QToolButton, QFrame#TextGroup QToolButton:hover,"
+                "QFrame#TextGroup QToolButton:checked {"
+                " background: transparent; border: none; padding: 0px; margin: 0px; }"
+                "QFrame#TextGroup QCheckBox { padding: 0px 8px 0px 0px; margin: 0px; }"));
+        } else {
+            m_textGroup->setStyleSheet(QStringLiteral(
+                "QFrame#TextGroup { background: transparent; border: none; }"));
+        }
+        qInfo() << "AnnotateWindow: Text group chrome=" << on << "sizeHint=" << m_textGroup->sizeHint();
+    } else {
+        qWarning() << "AnnotateWindow: updateTextSizeVisibility missing Text group on=" << on;
+    }
+    if (!on) {
+        qInfo() << "AnnotateWindow: Size and Outline hidden";
+        return;
+    }
+    QGraphicsItem *sized = m_editingText;
+    if (!sized && item && annotateKind(item) == AnnotateKind::Text) {
+        sized = item;
+    }
+    if (!sized) {
+        sized = caption;
+    }
+    if (!sized) {
+        qWarning() << "AnnotateWindow: Size/Outline visible but no sized item";
+        return;
+    }
+    const int size = annotateTextSize(sized);
+    const bool outline = annotateTextOutline(sized);
+    if (m_textSizeSlider) {
+        QSignalBlocker blockSize(m_textSizeSlider);
+        m_textSizeSlider->setValue(size);
+        m_textSize = size;
+    }
+    if (m_textOutlineBox) {
+        QSignalBlocker blockOutline(m_textOutlineBox);
+        m_textOutlineBox->setChecked(outline);
+        m_textOutline = outline;
+    }
+    qInfo() << "AnnotateWindow: Size/Outline sync size=" << size << "outline=" << outline;
 }
 
 QGraphicsItem *AnnotateWindow::lastTextSizedItem() const
@@ -1913,6 +2401,14 @@ QGraphicsItem *AnnotateWindow::lastTextSizedItem() const
         if (kind == AnnotateKind::Text) {
             qInfo() << "AnnotateWindow: last text-sized is selected text";
             return selected;
+        }
+        if (kind == AnnotateKind::Highlight && highlightStyle(selected) == HighlightStyle::FillText) {
+            for (QGraphicsItem *child : selected->childItems()) {
+                if (auto *caption = qgraphicsitem_cast<AnnotateTextItem *>(child)) {
+                    qInfo() << "AnnotateWindow: last text-sized is selected fill+text caption";
+                    return caption;
+                }
+            }
         }
         if (kind == AnnotateKind::Highlight && highlightStyle(selected) == HighlightStyle::Steps) {
             qInfo() << "AnnotateWindow: last text-sized is selected steps";
@@ -2055,6 +2551,26 @@ void AnnotateWindow::applyCanvasChrome()
     qInfo() << "AnnotateWindow: canvas chrome on preset=" << preset << "pad=" << pad
             << "radius=" << m_cornerRadius << "shadow=" << m_shadowAmount
             << "from=" << a << "to=" << b << "scene=" << canvas;
+}
+
+// ─── Ariadne's Thread [AT-0332] ─────────────────────
+// What: Gray toolbar buttons are white with black text on the dark annotate bar
+// Why:  Native QPushButton followed Light/Dark system text on a always-dark HUD
+// Date: 2026-08-28
+// Related: [AT-0071] AnnotateWindow.cpp:makeNativeToolbarButton, [AT-0149] AnnotateWindow.cpp:m_toolsBar
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::applyAnnotateChromeTheme()
+{
+    const Qt::ColorScheme scheme =
+        QGuiApplication::styleHints() ? QGuiApplication::styleHints()->colorScheme() : Qt::ColorScheme::Unknown;
+    qInfo() << "AnnotateWindow: applyAnnotateChromeTheme scheme=" << static_cast<int>(scheme)
+            << "grayButtons=whiteBlack";
+    styleGrayToolbarButton(m_saveBtn, true);
+    styleGrayToolbarButton(m_photoPictureButton, true);
+    styleGrayToolbarButton(m_photoTimer5Button, true);
+    layoutToolsBar();
+    qInfo() << "AnnotateWindow: gray buttons styled save=" << (m_saveBtn != nullptr)
+            << "picture=" << (m_photoPictureButton != nullptr) << "timer=" << (m_photoTimer5Button != nullptr);
 }
 
 // ─── Ariadne's Thread [AT-0080] ─────────────────────
@@ -2701,7 +3217,7 @@ void AnnotateWindow::beginNewText(const QPointF &scenePos)
     m_scene->addItem(item);
     qInfo() << "AnnotateWindow: new text draft at" << scenePos << "color=" << m_color
             << "width=" << item->textWidth() << "size=" << m_textSize << "outline=" << m_textOutline;
-    beginEditText(item, true);
+    beginEditText(item, true, scenePos);
 }
 
 // ─── Ariadne's Thread [AT-0116] ─────────────────────
@@ -2710,7 +3226,7 @@ void AnnotateWindow::beginNewText(const QPointF &scenePos)
 // Date: 2026-08-26
 // Related: [AT-0114] AnnotateWindow.cpp:lastColorableItem, [AT-0111] AnnotateWindow.cpp:textItemAt
 // ─────────────────────────────────────────────────────
-void AnnotateWindow::beginEditText(AnnotateTextItem *item, bool draft)
+void AnnotateWindow::beginEditText(AnnotateTextItem *item, bool draft, const QPointF &scenePos)
 {
     if (!item) {
         qWarning() << "AnnotateWindow: beginEditText null";
@@ -2722,17 +3238,37 @@ void AnnotateWindow::beginEditText(AnnotateTextItem *item, bool draft)
     m_editingText = item;
     m_textDraft = draft;
     m_editOldText = item->toPlainText();
+    // ─── Ariadne's Thread [AT-0340] ─────────────────────
+    // What: Activate the view, then place the QTextCursor before any leftover mousePress
+    // Why:  Size slider show and QGraphicsView::mousePress on the shot stole scene focus
+    // Date: 2026-08-28
+    // Related: [AT-0333] AnnotateWindow.cpp:updateTextSizeVisibility, [AT-0116] AnnotateWindow.cpp:beginEditText
+    // ─────────────────────────────────────────────────────
     selectAnnotation(item);
-    item->beginEdit();
+    if (m_view) {
+        m_view->setFocus(Qt::MouseFocusReason);
+        qInfo() << "AnnotateWindow: view focus after select hasFocus=" << m_view->hasFocus()
+                << "sceneActive=" << (m_scene && m_scene->isActive())
+                << "focusWidget="
+                << (QApplication::focusWidget() ? QApplication::focusWidget()->metaObject()->className()
+                                                : "null");
+    }
+    const QPointF itemPos = item->mapFromScene(scenePos);
+    item->beginEdit(itemPos);
+    if (m_scene) {
+        m_scene->setFocus(Qt::MouseFocusReason);
+        m_scene->setFocusItem(item, Qt::MouseFocusReason);
+        qInfo() << "AnnotateWindow: scene focusItem=" << (m_scene->focusItem() == item)
+                << "itemHasFocus=" << item->hasFocus() << "sceneActive=" << m_scene->isActive();
+    }
     if (m_undoAction) {
         m_undoAction->setShortcut(QKeySequence());
     }
     if (m_redoAction) {
         m_redoAction->setShortcut(QKeySequence());
     }
-    m_view->setFocus();
-    item->setFocus(Qt::MouseFocusReason);
-    qInfo() << "AnnotateWindow: text edit begin draft=" << draft << "oldLen=" << m_editOldText.size();
+    qInfo() << "AnnotateWindow: text edit begin draft=" << draft << "oldLen=" << m_editOldText.size()
+            << "itemPos=" << itemPos << "cursor=" << item->textCursor().position();
 }
 
 void AnnotateWindow::beginFillTextCaption(QGraphicsRectItem *rect)
@@ -2751,7 +3287,7 @@ void AnnotateWindow::beginFillTextCaption(QGraphicsRectItem *rect)
     caption->setTextOutline(m_textOutline);
     m_fillTextRect = rect;
     qInfo() << "AnnotateWindow: Fill+text caption start rect=" << box;
-    beginEditText(caption, false);
+    beginEditText(caption, false, caption->mapToScene(QPointF(4, 4)));
 }
 
 void AnnotateWindow::commitTextEdit()
@@ -2769,7 +3305,12 @@ void AnnotateWindow::commitTextEdit()
     item->endEdit();
     m_editingText = nullptr;
     m_textDraft = false;
+    m_textViewMouse = false;
     m_fillTextRect = nullptr;
+    if (m_view && m_view->viewport()) {
+        m_view->viewport()->unsetCursor();
+        qInfo() << "AnnotateWindow: text commit unset viewport cursor";
+    }
     if (m_undoAction) {
         m_undoAction->setShortcut(QKeySequence::Undo);
     }
@@ -2781,12 +3322,14 @@ void AnnotateWindow::commitTextEdit()
         if (empty) {
             delete item;
             qInfo() << "AnnotateWindow: Fill+text empty caption discarded, rect kept";
+            selectAnnotation(fillRect);
             return;
         }
         if (text != m_editOldText) {
             m_undo->push(new ChangeTextCommand(item, m_editOldText, text));
             qInfo() << "AnnotateWindow: Fill+text caption committed";
         }
+        selectAnnotation(fillRect);
         return;
     }
     if (draft) {
@@ -2794,22 +3337,26 @@ void AnnotateWindow::commitTextEdit()
             m_scene->removeItem(item);
             delete item;
             qInfo() << "AnnotateWindow: empty draft text discarded";
+            updateStrokeFillVisibility();
             return;
         }
         m_scene->removeItem(item);
         m_undo->push(new AddItemCommand(m_scene, item));
         qInfo() << "AnnotateWindow: committed text add";
+        updateStrokeFillVisibility();
         return;
     }
     if (empty) {
         m_undo->push(new RemoveItemCommand(m_scene, item));
         qInfo() << "AnnotateWindow: emptied text removed";
+        updateStrokeFillVisibility();
         return;
     }
     if (text != m_editOldText) {
         m_undo->push(new ChangeTextCommand(item, m_editOldText, text));
         qInfo() << "AnnotateWindow: committed text edit";
     }
+    updateStrokeFillVisibility();
 }
 
 // ─── Ariadne's Thread [AT-0072] ─────────────────────
@@ -2912,7 +3459,7 @@ AnnotateWindow::SelectHandle AnnotateWindow::hitSelectHandle(QGraphicsItem *item
         }
         return SelectHandle::None;
     }
-    if (kind == AnnotateKind::Highlight || kind == AnnotateKind::Blur) {
+    if (kind == AnnotateKind::Highlight || kind == AnnotateKind::Blur || kind == AnnotateKind::Text) {
         const QRectF box = itemSceneBox(item);
         qInfo() << "AnnotateWindow: hitSelectHandle visual box=" << box
                 << "bounds=" << item->mapRectToScene(item->boundingRect()) << "pos=" << scenePos;
@@ -3020,21 +3567,6 @@ AnnotateWindow::SelectHandle AnnotateWindow::hitSelectHandle(QGraphicsItem *item
         qInfo() << "AnnotateWindow: hitSelectHandle photo none box=" << box << "pos=" << scenePos;
         return SelectHandle::None;
     }
-    if (kind == AnnotateKind::Text) {
-        const QRectF box = itemSceneBox(item);
-        if (hitsScenePoint(box.topLeft(), scenePos) || hitsScenePoint(box.bottomLeft(), scenePos)
-            || hitsSceneEdge(box.topLeft(), box.bottomLeft(), scenePos)) {
-            qInfo() << "AnnotateWindow: hitSelectHandle text Left box=" << box << "pos=" << scenePos;
-            return SelectHandle::Left;
-        }
-        if (hitsScenePoint(box.topRight(), scenePos) || hitsScenePoint(box.bottomRight(), scenePos)
-            || hitsSceneEdge(box.topRight(), box.bottomRight(), scenePos)) {
-            qInfo() << "AnnotateWindow: hitSelectHandle text Right box=" << box << "pos=" << scenePos;
-            return SelectHandle::Right;
-        }
-        qInfo() << "AnnotateWindow: hitSelectHandle text none box=" << box << "pos=" << scenePos;
-        return SelectHandle::None;
-    }
     return SelectHandle::None;
 }
 
@@ -3082,7 +3614,10 @@ bool AnnotateWindow::tryStartHandleGesture(QGraphicsItem *item, const QPointF &s
         if (m_selectOldWidth < 0) {
             m_selectOldWidth = text->boundingRect().width();
         }
+        m_selectOldHeight = text->boxHeight();
+        m_selectOldRect = itemSceneBox(text);
         qInfo() << "AnnotateWindow: handle gesture text oldWidth=" << m_selectOldWidth
+                << "oldHeight=" << m_selectOldHeight << "oldRect=" << m_selectOldRect
                 << "handle=" << static_cast<int>(handle);
     }
     qInfo() << "AnnotateWindow: handle gesture start kind=" << static_cast<int>(annotateKind(item))
@@ -3146,10 +3681,10 @@ void AnnotateWindow::applySelectResize(const QPointF &scenePos)
     const QPointF clamped = clampToShot(scenePos);
     const AnnotateKind kind = annotateKind(m_selectItem);
     // ─── Ariadne's Thread [AT-0156] ─────────────────────
-    // What: Select Left/Right on a text block sets wrap width
-    // Why:  Text had no select handles; edge drag moved the block instead of wrapping
-    // Date: 2026-08-26
-    // Related: [AT-0153] AnnotateWindow.cpp:hitSelectHandle, [AT-0040] AnnotateItems.h:AnnotateTextItem
+    // What: Select handles on a text block set wrap width and box height
+    // Why:  Corners and bottom must stretch the box, not only Left/Right wrap
+    // Date: 2026-08-28
+    // Related: [AT-0348] AnnotateItems.cpp:setBoxHeight, [AT-0153] AnnotateWindow.cpp:hitSelectHandle
     // ─────────────────────────────────────────────────────
     if (kind == AnnotateKind::Text) {
         auto *text = qgraphicsitem_cast<AnnotateTextItem *>(m_selectItem);
@@ -3157,30 +3692,74 @@ void AnnotateWindow::applySelectResize(const QPointF &scenePos)
             qWarning() << "AnnotateWindow: applySelectResize text not AnnotateTextItem";
             return;
         }
-        const qreal minW = text->minTextWidth();
-        qreal width = text->textWidth();
-        if (width < 0) {
-            width = text->boundingRect().width();
+        QRectF box = m_selectOldRect;
+        if (!box.isValid() || box.isEmpty()) {
+            box = itemSceneBox(text);
+            qWarning() << "AnnotateWindow: applySelectResize text empty oldRect, live=" << box;
         }
-        if (m_selectHandle == SelectHandle::Right || m_selectHandle == SelectHandle::TopRight
-            || m_selectHandle == SelectHandle::BottomRight) {
-            width = clamped.x() - text->pos().x();
-        } else if (m_selectHandle == SelectHandle::Left || m_selectHandle == SelectHandle::TopLeft
-                   || m_selectHandle == SelectHandle::BottomLeft) {
-            const qreal right = m_selectOldPos.x() + m_selectOldWidth;
-            width = right - clamped.x();
-            text->setPos(QPointF(right - qBound(minW, width, maxTextWidthOnShot(text)), m_selectOldPos.y()));
-        } else {
+        switch (m_selectHandle) {
+        case SelectHandle::TopLeft:
+            box.setTopLeft(clamped);
+            break;
+        case SelectHandle::TopRight:
+            box.setTopRight(clamped);
+            break;
+        case SelectHandle::BottomLeft:
+            box.setBottomLeft(clamped);
+            break;
+        case SelectHandle::BottomRight:
+            box.setBottomRight(clamped);
+            break;
+        case SelectHandle::Top:
+            box.setTop(clamped.y());
+            break;
+        case SelectHandle::Bottom:
+            box.setBottom(clamped.y());
+            break;
+        case SelectHandle::Left:
+            box.setLeft(clamped.x());
+            break;
+        case SelectHandle::Right:
+            box.setRight(clamped.x());
+            break;
+        default:
             qWarning() << "AnnotateWindow: applySelectResize bad text handle="
                        << static_cast<int>(m_selectHandle);
             return;
         }
-        width = qBound(minW, width, maxTextWidthOnShot(text));
-        text->setTextWidth(width);
-        const qreal docW = text->document() ? text->document()->size().width() : -1;
-        qInfo() << "AnnotateWindow: select resize text width=" << width << "docW=" << docW
-                << "bounds=" << text->boundingRect().width() << "pos=" << text->pos()
-                << "handle=" << static_cast<int>(m_selectHandle);
+        box = box.normalized();
+        const QRectF shot = shotRect();
+        const qreal minW = text->minTextWidth();
+        if (box.width() < minW) {
+            if (m_selectHandle == SelectHandle::Left || m_selectHandle == SelectHandle::TopLeft
+                || m_selectHandle == SelectHandle::BottomLeft) {
+                box.setLeft(box.right() - minW);
+            } else {
+                box.setWidth(minW);
+            }
+        }
+        text->setTextWidth(qBound(minW, box.width(), qMax(minW, shot.right() - box.left())));
+        const qreal minH = text->minTextHeight();
+        if (box.height() < minH) {
+            if (m_selectHandle == SelectHandle::Top || m_selectHandle == SelectHandle::TopLeft
+                || m_selectHandle == SelectHandle::TopRight) {
+                box.setTop(box.bottom() - minH);
+            } else {
+                box.setHeight(minH);
+            }
+        }
+        box = box.intersected(shot);
+        if (box.width() < minW || box.height() < minH) {
+            qWarning() << "AnnotateWindow: applySelectResize text box too small after shot clip=" << box
+                       << "minW=" << minW << "minH=" << minH;
+            return;
+        }
+        text->setBoxHeight(box.height());
+        const QRectF local = text->boundingRect();
+        text->setPos(box.topLeft() - local.topLeft());
+        qInfo() << "AnnotateWindow: select resize text width=" << text->textWidth()
+                << "height=" << text->boxHeight() << "sceneBox=" << box << "pos=" << text->pos()
+                << "handle=" << static_cast<int>(m_selectHandle) << "minH=" << minH;
         return;
     }
     if (kind == AnnotateKind::Highlight) {
@@ -3449,18 +4028,25 @@ void AnnotateWindow::commitSelectGesture()
             auto *text = qgraphicsitem_cast<AnnotateTextItem *>(item);
             if (text) {
                 const qreal nowW = text->textWidth();
+                const qreal nowH = text->boxHeight();
                 const QPointF nowP = text->pos();
-                if (!qFuzzyCompare(nowW + 1.0, m_selectOldWidth + 1.0) || nowP != m_selectOldPos) {
+                const bool widthChanged = !qFuzzyCompare(nowW + 1.0, m_selectOldWidth + 1.0);
+                const bool heightChanged = !qFuzzyCompare(nowH + 1.0, m_selectOldHeight + 1.0);
+                if (widthChanged || heightChanged || nowP != m_selectOldPos) {
                     auto *macro = new QUndoCommand(QStringLiteral("Resize text"));
-                    if (!qFuzzyCompare(nowW + 1.0, m_selectOldWidth + 1.0)) {
+                    if (widthChanged) {
                         new ChangeTextWidthCommand(text, m_selectOldWidth, nowW, macro);
+                    }
+                    if (heightChanged) {
+                        new ChangeTextHeightCommand(text, m_selectOldHeight, nowH, macro);
                     }
                     if (nowP != m_selectOldPos) {
                         ++m_photoMoveGestureId;
                         new ChangePhotoPosCommand(text, m_selectOldPos, nowP, m_photoMoveGestureId, macro);
                     }
                     m_undo->push(macro);
-                    qInfo() << "AnnotateWindow: select text width committed" << m_selectOldWidth << "->" << nowW
+                    qInfo() << "AnnotateWindow: select text box committed width=" << m_selectOldWidth
+                            << "->" << nowW << "height=" << m_selectOldHeight << "->" << nowH
                             << "pos=" << m_selectOldPos << "->" << nowP;
                 }
             }
@@ -3468,13 +4054,13 @@ void AnnotateWindow::commitSelectGesture()
     } else if (wasSelected) {
         if (auto *text = qgraphicsitem_cast<AnnotateTextItem *>(item)) {
             qInfo() << "AnnotateWindow: select second click edits text";
-            beginEditText(text, false);
+            beginEditText(text, false, m_selectPressScene);
         } else if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(item)) {
             for (QGraphicsItem *child : rect->childItems()) {
                 if (auto *caption = qgraphicsitem_cast<AnnotateTextItem *>(child)) {
                     qInfo() << "AnnotateWindow: select second click edits fill+text caption";
                     m_fillTextRect = rect;
-                    beginEditText(caption, false);
+                    beginEditText(caption, false, m_selectPressScene);
                     break;
                 }
             }
@@ -3511,13 +4097,53 @@ void AnnotateWindow::deleteSelectedAnnotation()
     m_undo->push(new RemoveItemCommand(m_scene, item));
 }
 
+// ─── Ariadne's Thread [AT-0327] ─────────────────────
+// What: 1px cosmetic shot border in EditorView::drawForeground
+// Why:  White screenshot on the window fill hid the image edge
+// Date: 2026-08-28
+// Related: [AT-0162] AnnotateWindow.cpp:EditorView, [AT-0056] AnnotateWindow.cpp:applyCanvasChrome
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::paintShotBorder(QPainter *painter) const
+{
+    if (!painter || !m_photo) {
+        return;
+    }
+    painter->save();
+    QPen pen(QColor(142, 142, 147), 0);
+    pen.setCosmetic(true);
+    painter->setPen(pen);
+    painter->setBrush(Qt::NoBrush);
+    const QRectF shot = shotRect();
+    const qreal radius = hasBackground() ? m_photo->cornerRadius() : 0.0;
+    const QRectF box = shot.adjusted(0.5, 0.5, -0.5, -0.5);
+    if (radius > 0) {
+        painter->drawRoundedRect(box, radius, radius);
+    } else {
+        painter->drawRect(box);
+    }
+    painter->restore();
+}
+
 void AnnotateWindow::paintSelectHandles(QPainter *painter) const
 {
     if (!painter || !m_view) {
         return;
     }
-    QGraphicsItem *item = m_selectItem ? m_selectItem : selectedAnnotation();
-    if (!item || m_editingText) {
+    // ─── Ariadne's Thread [AT-0347] ─────────────────────
+    // What: Keep text width handles visible and hittable while the caret is in the block
+    // Why:  paintSelectHandles returned early on m_editingText so stretch grips vanished
+    // Date: 2026-08-28
+    // Related: [AT-0156] AnnotateWindow.cpp:paintSelectHandles, [AT-0153] AnnotateWindow.cpp:hitSelectHandle
+    // ─────────────────────────────────────────────────────
+    QGraphicsItem *item = m_selectItem;
+    if (!item && m_editingText) {
+        item = m_editingText;
+        qInfo() << "AnnotateWindow: paintSelectHandles using editing text";
+    }
+    if (!item) {
+        item = selectedAnnotation();
+    }
+    if (!item) {
         return;
     }
     const AnnotateKind kind = annotateKind(item);
@@ -3563,15 +4189,23 @@ void AnnotateWindow::paintSelectHandles(QPainter *painter) const
         qInfo() << "AnnotateWindow: paint photo scale handles box=" << box;
         return;
     }
+    // ─── Ariadne's Thread [AT-0349] ─────────────────────
+    // What: Paint Top/Bottom mid handles on the text box
+    // Why:  Width-only grips could not stretch down or on the diagonal
+    // Date: 2026-08-28
+    // Related: [AT-0348] AnnotateItems.cpp:minTextHeight, [AT-0156] AnnotateWindow.cpp:applySelectResize
+    // ─────────────────────────────────────────────────────
     if (kind == AnnotateKind::Text) {
         const QRectF box = itemSceneBox(item);
         paintAt(box.topLeft());
         paintAt(box.topRight());
         paintAt(box.bottomLeft());
         paintAt(box.bottomRight());
+        paintAt(QPointF(box.center().x(), box.top()));
+        paintAt(QPointF(box.center().x(), box.bottom()));
         paintAt(QPointF(box.left(), box.center().y()));
         paintAt(QPointF(box.right(), box.center().y()));
-        qInfo() << "AnnotateWindow: paint text width handles box=" << box;
+        qInfo() << "AnnotateWindow: paint text box handles box=" << box;
         return;
     }
 }
@@ -3647,26 +4281,61 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
         setPhotoPipSelected(false);
     }
     if (!isOnShot(scenePos)) {
-        qInfo() << "AnnotateWindow: ignore press outside shot" << scenePos << "shot=" << shotRect();
+        // ─── Ariadne's Thread [AT-0343] ─────────────────────
+        // What: Outside-shot click keeps Blur/Highlight/Steps; other tools go to cursor
+        // Why:  Those three tools start and resize from chrome; Text/Arrow/Line must not
+        // Date: 2026-08-28
+        // Related: [AT-0342] AnnotateWindow.cpp:viewPress, [AT-0328] AnnotateWindow.cpp:viewPress
+        // ─────────────────────────────────────────────────────
+        qInfo() << "AnnotateWindow: press outside shot tool=" << static_cast<int>(m_tool)
+                << "style=" << static_cast<int>(m_highlightStyle) << scenePos << "shot=" << shotRect();
         if (m_editingText) {
+            qInfo() << "AnnotateWindow: outside shot commit text before tool decision";
             commitTextEdit();
         }
-        m_drawing = false;
-        return false;
-    }
-    if (auto *text = textItemAt(scenePos)) {
-        const QPointF itemPos = text->mapFromScene(scenePos);
-        if (!text->isEditing() && text->isResizeHandle(itemPos)) {
-            commitTextEdit();
-            m_resizingText = text;
-            m_resizeOldWidth = text->textWidth();
-            if (m_resizeOldWidth < 0) {
-                m_resizeOldWidth = text->boundingRect().width();
-            }
-            m_resizeStart = scenePos;
-            qInfo() << "AnnotateWindow: text width resize start" << m_resizeOldWidth;
+        QGraphicsItem *selected = selectedAnnotation();
+        const AnnotateKind kind = selected ? annotateKind(selected) : AnnotateKind::None;
+        const bool pullable = (kind == AnnotateKind::Blur || kind == AnnotateKind::Highlight);
+        qInfo() << "AnnotateWindow: outside shot selectedKind=" << static_cast<int>(kind)
+                << "pullable=" << pullable;
+        if (pullable && tryStartHandleGesture(selected, scenePos)) {
+            m_drawing = false;
+            qInfo() << "AnnotateWindow: outside shot pull handle kind=" << static_cast<int>(kind)
+                    << "keep tool=" << static_cast<int>(m_tool);
             return false;
         }
+        const bool keepDrawTool = (m_tool == Tool::Blur || m_tool == Tool::Highlight);
+        if (keepDrawTool) {
+            qInfo() << "AnnotateWindow: outside shot keep draw tool=" << static_cast<int>(m_tool)
+                    << "style=" << static_cast<int>(m_highlightStyle);
+        } else if (m_tool != Tool::Select) {
+            qInfo() << "AnnotateWindow: outside shot reset to Select from tool="
+                    << static_cast<int>(m_tool) << "selectedKind=" << static_cast<int>(kind);
+            setToolSelect();
+        } else {
+            qInfo() << "AnnotateWindow: outside shot already Select selectedKind="
+                    << static_cast<int>(kind);
+        }
+    }
+    // ─── Ariadne's Thread [AT-0352] ─────────────────────
+    // What: Route every text grip through the 8-handle Select gesture
+    // Why:  The old right-strip width drag stole BottomRight so diagonal stretch never ran
+    // Date: 2026-08-28
+    // Related: [AT-0348] AnnotateItems.cpp:setBoxHeight, [AT-0156] AnnotateWindow.cpp:applySelectResize
+    // ─────────────────────────────────────────────────────
+    AnnotateTextItem *handleText = m_editingText;
+    if (!handleText) {
+        handleText = qgraphicsitem_cast<AnnotateTextItem *>(selectedAnnotation());
+    }
+    if (!handleText) {
+        handleText = textItemAt(scenePos);
+    }
+    if (handleText && tryStartHandleGesture(handleText, scenePos)) {
+        m_drawing = false;
+        m_textViewMouse = false;
+        qInfo() << "AnnotateWindow: press text box handle tool=" << static_cast<int>(m_tool)
+                << "editing=" << (m_editingText != nullptr) << "pos=" << scenePos;
+        return false;
     }
     if (m_tool == Tool::Select) {
         commitTextEdit();
@@ -3711,7 +4380,10 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
                 if (m_selectOldWidth < 0) {
                     m_selectOldWidth = text->boundingRect().width();
                 }
+                m_selectOldHeight = text->boxHeight();
+                m_selectOldRect = itemSceneBox(text);
                 qInfo() << "AnnotateWindow: select text oldWidth=" << m_selectOldWidth
+                        << "oldHeight=" << m_selectOldHeight << "oldRect=" << m_selectOldRect
                         << "handle=" << static_cast<int>(m_selectHandle);
             }
             qInfo() << "AnnotateWindow: select gesture start kind=" << static_cast<int>(annotateKind(hit))
@@ -3724,7 +4396,8 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
     if (m_editingText) {
         AnnotateTextItem *hit = textItemAt(scenePos);
         if (hit == m_editingText) {
-            qInfo() << "AnnotateWindow: click inside editing text";
+            m_textViewMouse = true;
+            qInfo() << "AnnotateWindow: click inside editing text, view owns mouse";
             return true;
         }
         commitTextEdit();
@@ -3732,8 +4405,9 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
     if (auto *text = textItemAt(scenePos)) {
         qInfo() << "AnnotateWindow: re-enter existing text";
         m_fillTextRect = qgraphicsitem_cast<QGraphicsRectItem *>(text->parentItem());
-        beginEditText(text, false);
-        return true;
+        beginEditText(text, false, scenePos);
+        m_textViewMouse = false;
+        return false;
     }
     if (auto *selectedPhoto = qgraphicsitem_cast<AnnotatePhotoItem *>(selectedAnnotation())) {
         if (tryStartHandleGesture(selectedPhoto, scenePos)) {
@@ -3756,7 +4430,9 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
     }
     if (m_tool == Tool::Text) {
         beginNewText(scenePos);
-        return true;
+        m_textViewMouse = false;
+        qInfo() << "AnnotateWindow: new text, skip view mousePress so shot cannot steal focus";
+        return false;
     }
     if (m_tool == Tool::Highlight || m_tool == Tool::Blur) {
         const AnnotateKind want =
@@ -3830,7 +4506,41 @@ bool AnnotateWindow::viewMove(QMouseEvent *event, const QPointF &scenePos)
         return false;
     }
     if (m_editingText) {
-        return true;
+        const SelectHandle handle = hitSelectHandle(m_editingText, scenePos);
+        const bool onHandle = (handle != SelectHandle::None && handle != SelectHandle::Move);
+        if (m_view && m_view->viewport()) {
+            Qt::CursorShape cursor = Qt::IBeamCursor;
+            if (onHandle) {
+                switch (handle) {
+                case SelectHandle::Left:
+                case SelectHandle::Right:
+                    cursor = Qt::SizeHorCursor;
+                    break;
+                case SelectHandle::Top:
+                case SelectHandle::Bottom:
+                    cursor = Qt::SizeVerCursor;
+                    break;
+                case SelectHandle::TopLeft:
+                case SelectHandle::BottomRight:
+                    cursor = Qt::SizeFDiagCursor;
+                    break;
+                case SelectHandle::TopRight:
+                case SelectHandle::BottomLeft:
+                    cursor = Qt::SizeBDiagCursor;
+                    break;
+                default:
+                    cursor = Qt::SizeAllCursor;
+                    break;
+                }
+            }
+            m_view->viewport()->setCursor(cursor);
+        }
+        qInfo() << "AnnotateWindow: viewMove text viewOwnsMouse=" << m_textViewMouse
+                << "handle=" << static_cast<int>(handle) << "onHandle=" << onHandle;
+        if (onHandle) {
+            return false;
+        }
+        return m_textViewMouse;
     }
     onSceneMoved(clampToShot(scenePos));
     return false;
@@ -3876,7 +4586,10 @@ bool AnnotateWindow::viewRelease(QMouseEvent *event, const QPointF &scenePos)
         return false;
     }
     if (m_editingText) {
-        return true;
+        const bool forward = m_textViewMouse;
+        qInfo() << "AnnotateWindow: viewRelease text viewOwnsMouse=" << m_textViewMouse;
+        m_textViewMouse = false;
+        return forward;
     }
     onSceneReleased(clampToShot(scenePos));
     return false;
@@ -3915,8 +4628,14 @@ void AnnotateWindow::onSceneMoved(const QPointF &pos)
     if (!m_drawing) {
         return;
     }
-    const QRectF rect = QRectF(m_dragStart, pos).normalized();
     if (m_tool == Tool::Highlight || m_tool == Tool::Blur) {
+        const QRectF rect = clipDraftToShot(m_dragStart, pos);
+        if (rect.width() < 1 || rect.height() < 1) {
+            if (auto *item = qgraphicsitem_cast<QGraphicsRectItem *>(m_draft)) {
+                item->setVisible(false);
+            }
+            return;
+        }
         if (!m_draft) {
             auto *item = new QGraphicsRectItem();
             if (m_tool == Tool::Highlight) {
@@ -3930,25 +4649,31 @@ void AnnotateWindow::onSceneMoved(const QPointF &pos)
             applyItemColor(item, m_color);
             m_scene->addItem(item);
             m_draft = item;
-            qInfo() << "AnnotateWindow: draft created tool=" << static_cast<int>(m_tool);
+            qInfo() << "AnnotateWindow: draft created tool=" << static_cast<int>(m_tool) << "clip=" << rect;
             updateStrokeFillVisibility();
         }
         if (auto *item = qgraphicsitem_cast<QGraphicsRectItem *>(m_draft)) {
+            item->setVisible(true);
             item->setRect(rect);
         }
     } else if (m_tool == Tool::Arrow || m_tool == Tool::Line) {
+        const QPointF from = clampToShot(m_dragStart);
+        if (QLineF(from, pos).length() < 1) {
+            qInfo() << "AnnotateWindow: line clip too short tool=" << static_cast<int>(m_tool);
+            return;
+        }
         if (m_draft) {
             m_scene->removeItem(m_draft);
             delete m_draft;
             m_draft = nullptr;
         }
         if (m_tool == Tool::Arrow) {
-            m_draft = makeArrow(m_dragStart, pos, m_color);
+            m_draft = makeArrow(from, pos, m_color);
         } else {
-            m_draft = makeLine(m_dragStart, pos, m_color);
+            m_draft = makeLine(from, pos, m_color);
         }
         m_scene->addItem(m_draft);
-        qInfo() << "AnnotateWindow: draft line tool=" << static_cast<int>(m_tool);
+        qInfo() << "AnnotateWindow: draft line tool=" << static_cast<int>(m_tool) << "from=" << from << "to=" << pos;
     }
 }
 
@@ -3976,13 +4701,28 @@ void AnnotateWindow::onSceneReleased(const QPointF &pos)
             setBlurSource(pix, source);
             pix->setData(kAnnotateRoleBlurRadius, m_blurRadius);
             m_undo->push(new AddItemCommand(m_scene, pix));
-            qInfo() << "AnnotateWindow: committed blur radius=" << m_blurRadius << clipped;
+            selectAnnotation(pix);
+            qInfo() << "AnnotateWindow: committed blur radius=" << m_blurRadius << clipped
+                    << "selected=" << pix->isSelected();
         }
         m_drawing = false;
         return;
     }
     QGraphicsItem *item = m_draft;
     m_draft = nullptr;
+    if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(item)) {
+        const QRectF clipped = rect->rect().intersected(shotRect());
+        if (clipped.width() < 1 || clipped.height() < 1 || !rect->isVisible()) {
+            m_scene->removeItem(item);
+            delete item;
+            m_drawing = false;
+            qInfo() << "AnnotateWindow: discard empty highlight clip=" << clipped;
+            return;
+        }
+        rect->setRect(clipped);
+        rect->setVisible(true);
+        qInfo() << "AnnotateWindow: highlight clipped to" << clipped;
+    }
     const HighlightStyle style = (m_tool == Tool::Highlight) ? highlightStyle(item) : HighlightStyle::Fill;
     // ─── Ariadne's Thread [AT-0152] ─────────────────────
     // What: Keep the Steps rect on the scene, then place the badge against shotRect()
@@ -4240,8 +4980,11 @@ QJsonObject AnnotateWindow::serializeSession(QHash<QString, QImage> *assets) con
             }
             obj.insert(QStringLiteral("text"), text->toPlainText());
             obj.insert(QStringLiteral("textWidth"), text->textWidth());
+            obj.insert(QStringLiteral("textHeight"), text->boxHeight());
             obj.insert(QStringLiteral("textSize"), text->textSize());
             obj.insert(QStringLiteral("textOutline"), text->textOutline());
+            qInfo() << "AnnotateWindow: serialize text width=" << text->textWidth()
+                    << "height=" << text->boxHeight();
         } else if (kind == AnnotateKind::Blur) {
             auto *pix = qgraphicsitem_cast<QGraphicsPixmapItem *>(item);
             if (!pix || !assets) {
@@ -4345,6 +5088,9 @@ bool AnnotateWindow::restoreItems(const QJsonArray &items, const QHash<QString, 
             text->setTextSize(obj.value(QStringLiteral("textSize")).toInt(18));
             text->setTextOutline(obj.value(QStringLiteral("textOutline")).toBool(false));
             text->setTextWidth(obj.value(QStringLiteral("textWidth")).toDouble(text->textWidth()));
+            text->setBoxHeight(obj.value(QStringLiteral("textHeight")).toDouble(text->boxHeight()));
+            qInfo() << "AnnotateWindow: restore text width=" << text->textWidth()
+                    << "height=" << text->boxHeight();
             m_scene->addItem(text);
             ++restored;
         } else if (kind == AnnotateKind::Blur) {

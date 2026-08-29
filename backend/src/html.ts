@@ -2,8 +2,24 @@ export function sharePage(opts: {
   publicId: string;
   imageUrl: string;
   missing?: boolean;
+  unavailable?: boolean;
   abuseEmail: string;
 }): string {
+  // ─── Ariadne's Thread [AT-0326] ─────────────────────
+  // What: API share HTML for visibility=unavailable is 200 without the PNG
+  // Why:  Same quota-eviction URL as seenshot.app /screenshot/{id}
+  // Date: 2026-08-28
+  // Related: [AT-0325] backend/src/quota.ts:evictShot, [AT-0208] backend/src/index.ts:serveShare
+  // ─────────────────────────────────────────────────────
+  if (opts.unavailable) {
+    console.log(`html: share unavailable publicId=${opts.publicId}`);
+    return `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="robots" content="noindex">
+<title>SeenShot</title></head>
+<body style="font-family:sans-serif;padding:40px">
+<p>This screenshot is unavailable.</p>
+</body></html>`;
+  }
   if (opts.missing) {
     return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="robots" content="noindex">
