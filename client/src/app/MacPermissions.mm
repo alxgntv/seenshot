@@ -7,6 +7,7 @@
 #include <QWidget>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -15,9 +16,19 @@ std::atomic<bool> g_quitAllowed{false};
 
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
+#import <CoreGraphics/CGWindowLevel.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Security/Security.h>
+
+namespace {
+id g_escapeGlobalMonitor = nil;
+id g_escapeLocalMonitor = nil;
+id g_mouseLocalMonitor = nil;
+std::function<void()> g_escapeHandler;
+std::atomic<int> g_escapeGeneration{0};
+}
 
 void MacPermissions::activateApp()
 {
@@ -111,6 +122,12 @@ bool MacPermissions::openDefaultBrowser(const QUrl &pageUrl)
 // Date: 2026-08-26
 // Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, [AT-0010] RegionPicker.cpp
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0406] ─────────────────────
+// What: NSWindowStyleMaskNonactivatingPanel and orderFront, not makeKeyAndOrderFront
+// Why:  Key/activation closed dropdowns and menus in the app being captured
+// Date: 2026-09-03
+// Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, Apple NSWindowStyleMaskNonactivatingPanel
+// ─────────────────────────────────────────────────────
 void MacPermissions::pinCaptureOverlay(QWidget *overlay)
 {
     if (!overlay) {
@@ -126,18 +143,166 @@ void MacPermissions::pinCaptureOverlay(QWidget *overlay)
     }
     [window setLevel:CGShieldingWindowLevel()];
     [window setIgnoresMouseEvents:NO];
+    [window setHidesOnDeactivate:NO];
     [window setMovable:NO];
     [window setMovableByWindowBackground:NO];
     [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces
                                   | NSWindowCollectionBehaviorFullScreenAuxiliary
                                   | NSWindowCollectionBehaviorTransient];
-    [window makeKeyAndOrderFront:nil];
+    const BOOL isPanel = [window isKindOfClass:[NSPanel class]];
+    qInfo() << "MacPermissions: pinCaptureOverlay class=" << QString::fromNSString(NSStringFromClass([window class]))
+            << " isPanel=" << static_cast<bool>(isPanel) << " mask=" << static_cast<unsigned long>([window styleMask]);
+    if (isPanel) {
+        NSPanel *panel = (NSPanel *)window;
+        [panel setStyleMask:(panel.styleMask | NSWindowStyleMaskNonactivatingPanel)];
+        [panel setBecomesKeyOnlyIfNeeded:YES];
+        [panel setLevel:CGShieldingWindowLevel()];
+        qInfo() << "MacPermissions: pinCaptureOverlay nonactivating mask="
+                << static_cast<unsigned long>(panel.styleMask)
+                << " becomesKeyOnlyIfNeeded=" << static_cast<bool>(panel.becomesKeyOnlyIfNeeded);
+    } else {
+        qWarning() << "MacPermissions: pinCaptureOverlay not NSPanel, dropdowns may dismiss";
+    }
+    [window orderFront:nil];
     qInfo() << "MacPermissions: pinCaptureOverlay visible=" << overlay->isVisible()
-            << " active=" << overlay->isActiveWindow() << " geo=" << overlay->geometry()
+            << " active=" << overlay->isActiveWindow() << " appActive=" << static_cast<bool>([NSApp isActive])
+            << " geo=" << overlay->geometry()
             << " level=" << static_cast<int>([window level])
+            << " isKey=" << static_cast<bool>([window isKeyWindow])
             << " ignoresMouse=" << static_cast<bool>([window ignoresMouseEvents])
             << " movable=" << static_cast<bool>([window isMovable])
             << " movableByBackground=" << static_cast<bool>([window isMovableByWindowBackground]);
+}
+
+// ─── Ariadne's Thread [AT-0404] ─────────────────────
+// What: Global+local NSEvent monitors for Escape without activating SeenShot
+// Why:  grabKeyboard / makeKeyAndOrderFront deactivated the source app and closed menus
+// Date: 2026-09-03
+// Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, Apple NSEvent addGlobalMonitorForEventsMatchingMask
+// ─────────────────────────────────────────────────────
+void MacPermissions::clearCaptureEscapeHandler()
+{
+    const int gen = g_escapeGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (g_escapeGlobalMonitor) {
+        [NSEvent removeMonitor:g_escapeGlobalMonitor];
+        g_escapeGlobalMonitor = nil;
+    }
+    if (g_escapeLocalMonitor) {
+        [NSEvent removeMonitor:g_escapeLocalMonitor];
+        g_escapeLocalMonitor = nil;
+    }
+    if (g_mouseLocalMonitor) {
+        [NSEvent removeMonitor:g_mouseLocalMonitor];
+        g_mouseLocalMonitor = nil;
+    }
+    g_escapeHandler = nullptr;
+    qInfo() << "MacPermissions: capture Escape monitors removed generation=" << gen;
+}
+
+void MacPermissions::setCaptureEscapeHandler(const std::function<void()> &handler)
+{
+    clearCaptureEscapeHandler();
+    if (!handler) {
+        qInfo() << "MacPermissions: capture Escape handler empty, skip install";
+        return;
+    }
+    g_escapeHandler = handler;
+    const int gen = g_escapeGeneration.load(std::memory_order_acquire);
+    qInfo() << "MacPermissions: capture Escape handler install generation=" << gen;
+    g_escapeGlobalMonitor =
+        [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                               handler:^(NSEvent *event) {
+                                                   if (!event || event.keyCode != kVK_Escape) {
+                                                       return;
+                                                   }
+                                                   qInfo() << "MacPermissions: capture Escape global generation="
+                                                           << gen;
+                                                   dispatch_async(dispatch_get_main_queue(), ^{
+                                                       if (g_escapeGeneration.load(std::memory_order_acquire)
+                                                           != gen) {
+                                                           qInfo() << "MacPermissions: drop stale global Escape";
+                                                           return;
+                                                       }
+                                                       if (g_escapeHandler) {
+                                                           g_escapeHandler();
+                                                       }
+                                                   });
+                                               }];
+    g_escapeLocalMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                              handler:^NSEvent *(NSEvent *event) {
+                                                  if (!event || event.keyCode != kVK_Escape) {
+                                                      return event;
+                                                  }
+                                                  qInfo() << "MacPermissions: capture Escape local generation="
+                                                          << gen;
+                                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                                      if (g_escapeGeneration.load(std::memory_order_acquire)
+                                                          != gen) {
+                                                          qInfo() << "MacPermissions: drop stale local Escape";
+                                                          return;
+                                                      }
+                                                      if (g_escapeHandler) {
+                                                          g_escapeHandler();
+                                                      }
+                                                  });
+                                                  return nil;
+                                              }];
+    // ─── Ariadne's Thread [AT-0409] ─────────────────────
+    // What: Call NSApp preventWindowOrdering on overlay mouseDown
+    // Why:  Clicking the path panel still activated SeenShot and dismissed menus
+    // Date: 2026-09-04
+    // Related: [AT-0404] MacPermissions.mm:setCaptureEscapeHandler, Apple NSApplication preventWindowOrdering
+    // ─────────────────────────────────────────────────────
+    g_mouseLocalMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown)
+                                              handler:^NSEvent *(NSEvent *event) {
+                                                  [NSApp preventWindowOrdering];
+                                                  qInfo() << "MacPermissions: preventWindowOrdering type="
+                                                          << (event ? static_cast<int>(event.type) : -1)
+                                                          << " appActive=" << static_cast<bool>([NSApp isActive]);
+                                                  return event;
+                                              }];
+    qInfo() << "MacPermissions: capture Escape monitors installed global="
+            << (g_escapeGlobalMonitor != nil) << " local=" << (g_escapeLocalMonitor != nil)
+            << " mouse=" << (g_mouseLocalMonitor != nil);
+}
+
+// ─── Ariadne's Thread [AT-0401] ─────────────────────
+// What: Raise an alert NSWindow above CGShieldingWindowLevel, below the cursor
+// Why:  Path overlay ate SeenShot warnings so the user could neither dismiss nor capture
+// Date: 2026-09-03
+// Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, Apple CGShieldingWindowLevel
+// ─────────────────────────────────────────────────────
+void MacPermissions::pinAlertAboveCapture(QWidget *alert)
+{
+    if (!alert) {
+        qWarning() << "MacPermissions: pinAlertAboveCapture null";
+        return;
+    }
+    alert->winId();
+    NSView *view = (__bridge NSView *)reinterpret_cast<void *>(alert->winId());
+    NSWindow *window = view.window;
+    if (window == nil) {
+        qWarning() << "MacPermissions: pinAlertAboveCapture no NSWindow visible=" << alert->isVisible()
+                   << " class=" << alert->metaObject()->className();
+        return;
+    }
+    const CGWindowLevel shield = CGShieldingWindowLevel();
+    const CGWindowLevel cursor = CGWindowLevelForKey(kCGCursorWindowLevelKey);
+    CGWindowLevel level = shield + 1;
+    if (level >= cursor || level <= shield) {
+        level = cursor - 1;
+        qInfo() << "MacPermissions: pinAlertAboveCapture clamp shield=" << static_cast<int>(shield)
+                << " cursor=" << static_cast<int>(cursor) << " level=" << static_cast<int>(level);
+    }
+    [window setLevel:level];
+    [window setHidesOnDeactivate:NO];
+    [window makeKeyAndOrderFront:nil];
+    qInfo() << "MacPermissions: pinAlertAboveCapture class=" << alert->metaObject()->className()
+            << " visible=" << alert->isVisible() << " active=" << alert->isActiveWindow()
+            << " level=" << static_cast<int>([window level]) << " shield=" << static_cast<int>(shield)
+            << " cursor=" << static_cast<int>(cursor);
 }
 
 // ─── Ariadne's Thread [AT-0126] ─────────────────────

@@ -23,6 +23,13 @@ constexpr int kAnnotateRoleP2 = 40;
 constexpr int kAnnotateRoleTextSize = 41;
 constexpr int kAnnotateRoleTextOutline = 42;
 constexpr int kAnnotateRoleTextHeight = 43;
+// ─── Ariadne's Thread [AT-0393] ─────────────────────
+// What: Auto-redact type on blur items (0 = manual)
+// Why:  Unchecking a type must not delete hand-drawn blur boxes
+// Date: 2026-09-03
+// Related: [AT-0393] AnnotateItems.cpp:setBlurRedactKind, [AT-0391] app→SensitiveRedact.h
+// ─────────────────────────────────────────────────────
+constexpr int kAnnotateRoleRedactKind = 44;
 
 enum class AnnotateKind {
     None = 0,
@@ -60,6 +67,8 @@ void attachHighlightStepBadge(QGraphicsRectItem *rect, const QColor &color, int 
 void placeHighlightStepBadge(QGraphicsRectItem *rect, const QRectF &shot, const QPointF &cursorScene);
 QImage boxBlur(const QImage &patch, int radius);
 void setBlurSource(QGraphicsItem *item, const QImage &source);
+void setBlurRedactKind(QGraphicsItem *item, int kind);
+int blurRedactKind(const QGraphicsItem *item);
 int blurRadius(const QGraphicsItem *item);
 void applyBlurRadius(QGraphicsItem *item, int radius);
 void layoutHighlightChrome(QGraphicsRectItem *rect);

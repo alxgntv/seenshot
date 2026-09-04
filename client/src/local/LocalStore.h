@@ -47,6 +47,22 @@ public:
     static QString pendingSignInEmail();
     static void setPendingSignInEmail(const QString &email);
     static void clearPendingSignInEmail();
+    // ─── Ariadne's Thread [AT-0390] ─────────────────────
+    // What: Persist Blur Automatic and per-type auto-redact checkboxes
+    // Why:  New screenshots must reuse the last Automatic type selection
+    // Date: 2026-09-03
+    // Related: [AT-0396] app→AnnotateWindow.cpp:ensureBlurSidebar, [AT-0391] app→SensitiveRedact.h
+    // ─────────────────────────────────────────────────────
+    static bool blurAutomatic();
+    static void setBlurAutomatic(bool on);
+    static bool blurAutoFaces();
+    static void setBlurAutoFaces(bool on);
+    static bool blurAutoPhones();
+    static void setBlurAutoPhones(bool on);
+    static bool blurAutoEmails();
+    static void setBlurAutoEmails(bool on);
+    static bool blurAutoApiKeys();
+    static void setBlurAutoApiKeys(bool on);
     static bool hasEditorSession();
     static bool writeEditorSession(const QJsonObject &json, const QImage &shot,
                                    const QHash<QString, QImage> &assets, QString *errorCode);

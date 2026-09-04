@@ -157,12 +157,18 @@ void captureWithManager(SCShareableContent *content, SCDisplay *display, const Q
 // Date: 2026-08-27
 // Related: [AT-0037] ScreenCaptureBackend.mm:captureRegion, [AT-0002] ErrorCatalog.cpp
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0406] ─────────────────────
+// What: Skip NSApp activateIgnoringOtherApps before ScreenCaptureKit
+// Why:  Activation dismissed HTML selects, menus, and other transient UI
+// Date: 2026-09-03
+// Related: [AT-0037] ScreenCaptureBackend.mm:captureRegion, [AT-0405] RegionPicker.cpp:showEvent
+// ─────────────────────────────────────────────────────
 QImage ScreenCaptureBackend::captureRegion(const QRect &screenRect, QString *errorCode)
 {
     qInfo() << "ScreenCaptureBackend: captureRegion" << screenRect
             << " mainThread=" << [NSThread isMainThread]
-            << " preflight=" << MacPermissions::hasScreenRecording();
-    [NSApp activateIgnoringOtherApps:YES];
+            << " preflight=" << MacPermissions::hasScreenRecording()
+            << " appActive=" << static_cast<bool>([NSApp isActive]);
 
     struct CaptureState {
         QEventLoop *loop = nullptr;

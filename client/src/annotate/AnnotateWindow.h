@@ -1,6 +1,7 @@
 #pragma once
 
 #include "annotate/AnnotateItems.h"
+#include "redact/SensitiveRedact.h"
 
 #include <QColor>
 #include <QHash>
@@ -8,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLineF>
+#include <QList>
 #include <QMainWindow>
 #include <QPoint>
 #include <QPointF>
@@ -141,6 +143,12 @@ private slots:
     void showCopyHint(QWidget *anchor, const QString &text);
     void hideCopyHint();
     void layoutCopyHint();
+    void onBlurAutomaticToggled(bool on);
+    void onBlurFacesToggled(bool on);
+    void onBlurPhonesToggled(bool on);
+    void onBlurEmailsToggled(bool on);
+    void onBlurApiKeysToggled(bool on);
+    void onAutoRedactFinished(int generation, const QList<SensitiveHit> &hits, const QString &error);
 
 private:
     void onSceneMoved(const QPointF &pos);
@@ -225,6 +233,21 @@ private:
     void fitShotToWindow();
     void applyCanvasChrome();
     void applyAnnotateChromeTheme();
+    void ensureBlurSidebar();
+    void setBlurSidebarVisible(bool on);
+    void updateBlurTypeVisibility();
+    void relayoutEditorChrome();
+    QGraphicsItem *commitBlurRect(const QRect &clipped, int radius, SensitiveKind redactKind, bool pushUndo);
+    void maybeStartAutoRedact();
+    void ensureSensitiveDetect();
+    void startSensitiveDetect();
+    void applyEnabledAutoBlur();
+    void removeAutoBlurOfKind(SensitiveKind kind);
+    void removeAllAutoBlur();
+    bool autoBlurKindEnabled(SensitiveKind kind) const;
+    int enabledSensitiveMask() const;
+    bool blurOverlapsExisting(const QRect &rect) const;
+    void onBlurTypeToggled(SensitiveKind kind, bool on);
     QRectF canvasRect() const;
     QImage shotImage() const;
     bool hasBackground() const;
@@ -237,6 +260,7 @@ private:
 
     QImage m_source;
     QGraphicsScene *m_scene = nullptr;
+    QWidget *m_editorBody = nullptr;
     QGraphicsView *m_view = nullptr;
     ShotPhotoItem *m_photo = nullptr;
     QGraphicsRectItem *m_background = nullptr;
@@ -272,6 +296,19 @@ private:
     QToolButton *m_blurButton = nullptr;
     QSlider *m_blurSlider = nullptr;
     QAction *m_blurSliderAction = nullptr;
+    QFrame *m_blurSidebar = nullptr;
+    QCheckBox *m_blurAutomaticBox = nullptr;
+    QWidget *m_blurTypeGroup = nullptr;
+    QCheckBox *m_blurFacesBox = nullptr;
+    QCheckBox *m_blurPhonesBox = nullptr;
+    QCheckBox *m_blurEmailsBox = nullptr;
+    QCheckBox *m_blurApiKeysBox = nullptr;
+    QList<SensitiveHit> m_redactHits;
+    int m_redactGeneration = 0;
+    bool m_redactCacheReady = false;
+    bool m_redactBusy = false;
+    bool m_redactSessionRestored = false;
+    bool m_redactShowKickoff = false;
     QLabel *m_radiusLabel = nullptr;
     QSlider *m_radius = nullptr;
     QLabel *m_shadowLabel = nullptr;

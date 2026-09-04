@@ -483,6 +483,34 @@ void setBlurSource(QGraphicsItem *item, const QImage &source)
     qInfo() << "setBlurSource: size=" << source.size();
 }
 
+// ─── Ariadne's Thread [AT-0393] ─────────────────────
+// What: Store auto-redact type on blur items (0 = manual)
+// Why:  Unchecking a type must not delete hand-drawn blur boxes
+// Date: 2026-09-03
+// Related: [AT-0397] app→AnnotateWindow.cpp:commitBlurRect, [AT-0391] app→SensitiveRedact.h
+// ─────────────────────────────────────────────────────
+void setBlurRedactKind(QGraphicsItem *item, int kind)
+{
+    if (!item) {
+        qWarning() << "setBlurRedactKind: null item kind=" << kind;
+        return;
+    }
+    item->setData(kAnnotateRoleRedactKind, kind);
+    qInfo() << "setBlurRedactKind: kind=" << kind;
+}
+
+int blurRedactKind(const QGraphicsItem *item)
+{
+    if (!item) {
+        return 0;
+    }
+    const QVariant value = item->data(kAnnotateRoleRedactKind);
+    if (!value.isValid()) {
+        return 0;
+    }
+    return value.toInt();
+}
+
 int blurRadius(const QGraphicsItem *item)
 {
     if (!item) {

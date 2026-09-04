@@ -25,6 +25,21 @@ public:
     static bool openDefaultBrowser(const QUrl &pageUrl);
     static void pinCaptureOverlay(QWidget *overlay);
     static void pinFloatingToolWindow(QWidget *overlay);
+    // ─── Ariadne's Thread [AT-0401] ─────────────────────
+    // What: Pin a Qt alert above the path-capture shield overlay
+    // Why:  QMessageBox at NSModalPanelWindowLevel sat under CGShieldingWindowLevel
+    // Date: 2026-09-03
+    // Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, [AT-0402] Application.cpp:eventFilter
+    // ─────────────────────────────────────────────────────
+    static void pinAlertAboveCapture(QWidget *alert);
+    // ─── Ariadne's Thread [AT-0404] ─────────────────────
+    // What: Escape monitor for a non-activating path overlay
+    // Why:  Overlay must not become key or menus/dropdowns in other apps close
+    // Date: 2026-09-03
+    // Related: [AT-0118] MacPermissions.mm:pinCaptureOverlay, Apple NSEvent addGlobalMonitorForEventsMatchingMask
+    // ─────────────────────────────────────────────────────
+    static void setCaptureEscapeHandler(const std::function<void()> &handler);
+    static void clearCaptureEscapeHandler();
     static void openScreenRecordingSettings();
     static void openCameraSettings();
     static bool hasScreenRecording();

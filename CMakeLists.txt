@@ -53,6 +53,13 @@ set(SEENSHOT_SOURCES
     client/src/annotate/AnnotateItems.cpp
     client/src/camera/CameraCapture.mm
     client/src/camera/PersonCutout.mm
+    # ─── Ariadne's Thread [AT-0395] ─────────────────────
+    # What: On-device Vision auto-redact for Blur
+    # Why:  Faces/OCR/API-key boxes must not use a network API
+    # Date: 2026-09-03
+    # Related: [AT-0392] app→SensitiveRedact.mm:detectSensitive, [AT-0396] app→AnnotateWindow.cpp
+    # ─────────────────────────────────────────────────────
+    client/src/redact/SensitiveRedact.mm
     client/src/export/CloudPngEncoder.cpp
     client/src/hotkey/MacHotkeyBackend.mm
     client/src/auth/AuthSession.cpp
@@ -100,6 +107,7 @@ qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS} ${
 set_source_files_properties(
     client/src/camera/CameraCapture.mm
     client/src/camera/PersonCutout.mm
+    client/src/redact/SensitiveRedact.mm
     client/src/app/MacLoginItem.mm
     client/src/app/MacUrlHandler.mm
     client/src/auth/MacOAuthClient.mm
@@ -125,6 +133,7 @@ target_link_libraries(SeenShot PRIVATE
     "-framework ServiceManagement"
     "-framework AVFoundation"
     "-framework Vision"
+    "-framework CoreImage"
     "-framework CoreVideo"
     "-framework CoreMedia"
     "-framework QuartzCore"

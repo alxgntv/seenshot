@@ -29,7 +29,10 @@
 #include <QNetworkInformation>
 #include <QFileOpenEvent>
 #include <QHash>
+#include <QImage>
 #include <QJsonObject>
+#include <QList>
+#include <QPointer>
 #include <QPushButton>
 #include <QScreen>
 #include <QTimer>
@@ -310,6 +313,13 @@ bool Application::eventFilter(QObject *watched, QEvent *event)
             MacPermissions::activateApp();
             m_onboarding->raise();
             m_onboarding->activateWindow();
+        } else if (m_picker && m_picker->isVisible()) {
+            QWidget *modal = QApplication::activeModalWidget();
+            qInfo() << "Application: skip raise annotate, path overlay visible modal="
+                    << (modal ? modal->metaObject()->className() : "none");
+            if (modal) {
+                MacPermissions::pinAlertAboveCapture(modal);
+            }
         } else if (m_editor && m_editor->isVisible()) {
             QWidget *modal = QApplication::activeModalWidget();
             if (modal) {
@@ -348,6 +358,44 @@ bool Application::eventFilter(QObject *watched, QEvent *event)
         qInfo() << "Application: FileOpen" << open->url().toString(QUrl::RemoveQuery);
         handleOpenUrl(open->url());
         return true;
+    }
+    // ─── Ariadne's Thread [AT-0402] ─────────────────────
+    // What: While the path overlay is up, lift QMessageBox above the shield window
+    // Why:  Warnings opened under the overlay and could not be closed or captured past
+    // Date: 2026-09-03
+    // Related: [AT-0401] MacPermissions.mm:pinAlertAboveCapture, [AT-0403] RegionPicker.cpp:yieldInput
+    // ─────────────────────────────────────────────────────
+    if (auto *box = qobject_cast<QMessageBox *>(watched)) {
+        if (event->type() == QEvent::Show || event->type() == QEvent::WindowActivate) {
+            const bool pickerUp = m_picker && m_picker->isVisible();
+            qInfo() << "Application: QMessageBox" << event->type() << "pickerUp=" << pickerUp
+                    << " visible=" << box->isVisible() << " modal=" << box->isModal();
+            if (pickerUp) {
+                m_picker->yieldInput();
+                MacPermissions::activateApp();
+                MacPermissions::pinAlertAboveCapture(box);
+                QPointer<QMessageBox> boxPtr = box;
+                QTimer::singleShot(0, this, [this, boxPtr]() {
+                    if (!boxPtr || !boxPtr->isVisible() || !m_picker || !m_picker->isVisible()) {
+                        qInfo() << "Application: skip delayed pinAlert boxVisible="
+                                << (boxPtr && boxPtr->isVisible()) << " picker="
+                                << (m_picker && m_picker->isVisible());
+                        return;
+                    }
+                    qInfo() << "Application: delayed pinAlertAboveCapture";
+                    MacPermissions::pinAlertAboveCapture(boxPtr);
+                    boxPtr->raise();
+                    boxPtr->activateWindow();
+                });
+            }
+        } else if (event->type() == QEvent::Hide) {
+            const bool pickerUp = m_picker && m_picker->isVisible();
+            qInfo() << "Application: QMessageBox Hide pickerUp=" << pickerUp;
+            if (pickerUp) {
+                m_picker->resumeInput();
+                MacPermissions::pinCaptureOverlay(m_picker);
+            }
+        }
     }
     return QObject::eventFilter(watched, event);
 }
@@ -442,7 +490,54 @@ void Application::beginCapture()
         m_picker->deleteLater();
         m_picker = nullptr;
     }
-    m_picker = new RegionPicker();
+    // ─── Ariadne's Thread [AT-0409] ─────────────────────
+    // What: Capture every screen before the path overlay, then crop the freeze
+    // Why:  Overlay click closed HTML selects and menus before ScreenCaptureKit
+    // Date: 2026-09-04
+    // Related: [AT-0406] ScreenCaptureBackend.mm:captureRegion, [AT-0010] RegionPicker.cpp
+    // ─────────────────────────────────────────────────────
+    ScreenCaptureBackend backend;
+    QList<CaptureFreezeFrame> frames;
+    QString freezeError;
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    qInfo() << "Application: freeze capture screens=" << screens.size()
+            << " appActive=" << (QGuiApplication::applicationState() == Qt::ApplicationActive);
+    for (QScreen *screen : screens) {
+        if (!screen) {
+            qWarning() << "Application: freeze skip null screen";
+            continue;
+        }
+        QString screenError;
+        const QImage image = backend.captureRegion(screen->geometry(), &screenError);
+        qInfo() << "Application: freeze screen name=" << screen->name() << "geo=" << screen->geometry()
+                << "dpr=" << screen->devicePixelRatio() << "image=" << image.size()
+                << "null=" << image.isNull() << "error=" << screenError;
+        if (image.isNull()) {
+            if (freezeError.isEmpty()) {
+                freezeError = screenError;
+            }
+            continue;
+        }
+        CaptureFreezeFrame frame;
+        frame.geometry = screen->geometry();
+        frame.image = image;
+        frames.append(frame);
+    }
+    if (frames.isEmpty()) {
+        setCaptureFlag(false);
+        qWarning() << "Application: freeze capture failed" << freezeError;
+        if (freezeError == QLatin1String("SCREEN_RECORDING_DENIED")) {
+            ensureScreenRecording();
+            return;
+        }
+        MacPermissions::activateApp();
+        QMessageBox::warning(nullptr, QStringLiteral("SeenShot"),
+                             ErrorCatalog::message(freezeError.isEmpty()
+                                                       ? QStringLiteral("SCREEN_CAPTURE_BLOCKED")
+                                                       : freezeError));
+        return;
+    }
+    m_picker = new RegionPicker(frames);
     connect(m_picker, &RegionPicker::regionPicked, this, &Application::onRegionPicked);
     connect(m_picker, &RegionPicker::cancelled, this, [this]() {
         qInfo() << "Application: capture cancelled";
@@ -451,13 +546,13 @@ void Application::beginCapture()
             m_picker->deleteLater();
         }
     });
-    MacPermissions::activateApp();
+    m_picker->winId();
+    MacPermissions::pinCaptureOverlay(m_picker);
     m_picker->show();
-    m_picker->raise();
-    m_picker->activateWindow();
     MacPermissions::pinCaptureOverlay(m_picker);
     qInfo() << "Application: picker shown visible=" << m_picker->isVisible()
-            << " geo=" << m_picker->geometry() << " active=" << m_picker->isActiveWindow();
+            << " geo=" << m_picker->geometry() << " active=" << m_picker->isActiveWindow()
+            << " frames=" << frames.size();
 }
 
 void Application::beginFullScreenCapture()
@@ -500,13 +595,27 @@ void Application::beginFullScreenCapture()
 void Application::onRegionPicked(const QRect &rect)
 {
     qInfo() << "Application: region" << rect;
+    QImage image;
     if (m_picker) {
+        image = m_picker->croppedFreeze(rect);
+        qInfo() << "Application: freeze crop size=" << image.size() << "null=" << image.isNull();
         m_picker->hide();
         m_picker->deleteLater();
         m_picker = nullptr;
-        qInfo() << "Application: picker hidden before capture, no processEvents";
+        qInfo() << "Application: picker hidden after freeze crop";
+    } else {
+        qWarning() << "Application: region picked with no picker" << rect;
     }
-    captureRect(rect, QStringLiteral("region"));
+    setCaptureFlag(false);
+    if (image.isNull()) {
+        qWarning() << "Application: freeze crop failed" << rect;
+        MacPermissions::activateApp();
+        QMessageBox::warning(nullptr, QStringLiteral("SeenShot"),
+                             ErrorCatalog::message(QStringLiteral("SCREEN_CAPTURE_BLOCKED")));
+        return;
+    }
+    Analytics::instance().track(QStringLiteral("capture"), {{QStringLiteral("kind"), QStringLiteral("region")}});
+    showAnnotate(image);
 }
 
 // ─── Ariadne's Thread [AT-0105] ─────────────────────

@@ -239,6 +239,92 @@ void LocalStore::clearPendingSignInEmail()
     qInfo() << "LocalStore: pendingSignInEmail cleared";
 }
 
+// ─── Ariadne's Thread [AT-0390] ─────────────────────
+// What: Persist Blur Automatic and per-type auto-redact checkboxes
+// Why:  New screenshots must reuse the last Automatic type selection
+// Date: 2026-09-03
+// Related: [AT-0396] app→AnnotateWindow.cpp:ensureBlurSidebar, [AT-0021] LocalStore.h
+// ─────────────────────────────────────────────────────
+bool LocalStore::blurAutomatic()
+{
+    QSettings settings;
+    const bool on = settings.value(QStringLiteral("blurAutomatic"), false).toBool();
+    qInfo() << "LocalStore: blurAutomatic=" << on;
+    return on;
+}
+
+void LocalStore::setBlurAutomatic(bool on)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("blurAutomatic"), on);
+    settings.sync();
+    qInfo() << "LocalStore: blurAutomatic set=" << on;
+}
+
+bool LocalStore::blurAutoFaces()
+{
+    QSettings settings;
+    const bool on = settings.value(QStringLiteral("blurAutoFaces"), false).toBool();
+    qInfo() << "LocalStore: blurAutoFaces=" << on;
+    return on;
+}
+
+void LocalStore::setBlurAutoFaces(bool on)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("blurAutoFaces"), on);
+    settings.sync();
+    qInfo() << "LocalStore: blurAutoFaces set=" << on;
+}
+
+bool LocalStore::blurAutoPhones()
+{
+    QSettings settings;
+    const bool on = settings.value(QStringLiteral("blurAutoPhones"), false).toBool();
+    qInfo() << "LocalStore: blurAutoPhones=" << on;
+    return on;
+}
+
+void LocalStore::setBlurAutoPhones(bool on)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("blurAutoPhones"), on);
+    settings.sync();
+    qInfo() << "LocalStore: blurAutoPhones set=" << on;
+}
+
+bool LocalStore::blurAutoEmails()
+{
+    QSettings settings;
+    const bool on = settings.value(QStringLiteral("blurAutoEmails"), false).toBool();
+    qInfo() << "LocalStore: blurAutoEmails=" << on;
+    return on;
+}
+
+void LocalStore::setBlurAutoEmails(bool on)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("blurAutoEmails"), on);
+    settings.sync();
+    qInfo() << "LocalStore: blurAutoEmails set=" << on;
+}
+
+bool LocalStore::blurAutoApiKeys()
+{
+    QSettings settings;
+    const bool on = settings.value(QStringLiteral("blurAutoApiKeys"), false).toBool();
+    qInfo() << "LocalStore: blurAutoApiKeys=" << on;
+    return on;
+}
+
+void LocalStore::setBlurAutoApiKeys(bool on)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("blurAutoApiKeys"), on);
+    settings.sync();
+    qInfo() << "LocalStore: blurAutoApiKeys set=" << on;
+}
+
 // ─── Ariadne's Thread [AT-0091] ─────────────────────
 // What: Persist open annotate session for Sparkle relaunch
 // Why:  PRD-05 — install must not wipe the current shot and objects

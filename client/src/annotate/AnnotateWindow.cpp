@@ -12,6 +12,7 @@
 #include "errors/ErrorCatalog.h"
 #include "export/CloudPngEncoder.h"
 #include "local/LocalStore.h"
+#include "redact/SensitiveRedact.h"
 #include "update/SparkleUpdater.h"
 
 #include <QAction>
@@ -81,7 +82,9 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QTextCursor>
+#include <QThread>
 #include <QToolBar>
+#include <QMetaObject>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QTransform>
@@ -414,6 +417,15 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_photo->setGraphicsEffect(m_photoShadow);
     m_scene->setSceneRect(m_source.rect());
     m_view = new EditorView(m_scene, this);
+    // ─── Ariadne's Thread [AT-0398] ─────────────────────
+    // What: Ignore QGraphicsView scene sizeHint so the Blur column stays on-screen
+    // Why:  Scene-pixel sizeHint pushed the 240px sidebar past the window edge
+    // Date: 2026-09-03
+    // Related: [AT-0396] AnnotateWindow.cpp:ensureBlurSidebar, [AT-0050] AnnotateWindow.cpp:fitShotToWindow
+    // ─────────────────────────────────────────────────────
+    m_view->setMinimumSize(0, 0);
+    m_view->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    qInfo() << "AnnotateWindow: view sizePolicy ignored scene=" << m_source.size();
     m_undo = new QUndoStack(this);
     connect(m_undo, &QUndoStack::indexChanged, this, [this](int index) {
         qInfo() << "AnnotateWindow: undo indexChanged=" << index;
@@ -990,7 +1002,22 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     toolbar->addWidget(m_shareBtn);
     qInfo() << "AnnotateWindow: slider labels on; Save/Share Link native QPushButton shareProgress=on";
 
-    setCentralWidget(m_view);
+    // ─── Ariadne's Thread [AT-0396] ─────────────────────
+    // What: Blur sidebar in a right-hand column next to the view
+    // Why:  Overlay would cover the shot; viewport shrink must re-fit
+    // Date: 2026-09-03
+    // Related: [AT-0390] app→LocalStore.cpp:blurAutomatic, [AT-0338] AnnotateWindow.cpp:m_blurButton
+    // ─────────────────────────────────────────────────────
+    ensureBlurSidebar();
+    m_editorBody = new QWidget(this);
+    auto *bodyLay = new QHBoxLayout(m_editorBody);
+    bodyLay->setContentsMargins(0, 0, 0, 0);
+    bodyLay->setSpacing(0);
+    bodyLay->setSizeConstraint(QLayout::SetNoConstraint);
+    bodyLay->addWidget(m_view, 1);
+    bodyLay->addWidget(m_blurSidebar, 0);
+    m_blurSidebar->hide();
+    setCentralWidget(m_editorBody);
     layoutToolsBar();
     m_view->setAlignment(Qt::AlignCenter);
     m_camera = new CameraCapture(this);
@@ -1078,6 +1105,9 @@ void AnnotateWindow::closeEvent(QCloseEvent *event)
             << " quitOnClose=" << testAttribute(Qt::WA_QuitOnClose);
     abortPhotoCycle(true, false);
     commitTextEdit();
+    ++m_redactGeneration;
+    m_redactBusy = false;
+    qInfo() << "AnnotateWindow: close bump redactGeneration=" << m_redactGeneration;
     // ─── Ariadne's Thread [AT-0207] ─────────────────────
     // What: Disconnect QUndoStack before the widget tree is torn down
     // Why:  ~QUndoStack emits indexChanged after QWidget children are gone; selectedAnnotation SIGSEGV
@@ -1117,6 +1147,13 @@ void AnnotateWindow::showEvent(QShowEvent *event)
     layoutUpdateCard();
     layoutToolsBar();
     layoutPhotoChoice();
+    if (!m_redactShowKickoff) {
+        m_redactShowKickoff = true;
+        QTimer::singleShot(0, this, [this]() {
+            qInfo() << "AnnotateWindow: auto redact kickoff after show restored=" << m_redactSessionRestored;
+            maybeStartAutoRedact();
+        });
+    }
     qInfo() << "AnnotateWindow: showEvent layout applied";
 }
 
@@ -1216,10 +1253,22 @@ void AnnotateWindow::setToolText()
     qInfo() << "AnnotateWindow: tool=Text";
 }
 
+// ─── Ariadne's Thread [AT-0407] ─────────────────────
+// What: Second Blur click returns to Select and hides the sidebar
+// Why:  Exclusive QActionGroup kept Blur checked so the panel could not be dismissed
+// Date: 2026-09-03
+// Related: [AT-0398] AnnotateWindow.cpp:setBlurSidebarVisible, [AT-0338] AnnotateWindow.cpp:m_blurAction
+// ─────────────────────────────────────────────────────
 void AnnotateWindow::setToolBlur()
 {
     commitTextEdit();
+    if (m_tool == Tool::Blur) {
+        qInfo() << "AnnotateWindow: Blur clicked while active, close sidebar";
+        setToolSelect();
+        return;
+    }
     m_tool = Tool::Blur;
+    m_drawing = false;
     syncToolActions();
     qInfo() << "AnnotateWindow: tool=Blur";
 }
@@ -1257,7 +1306,9 @@ void AnnotateWindow::syncToolActions()
     }
     QSignalBlocker block(m_toolGroup);
     target->setChecked(true);
-    qInfo() << "AnnotateWindow: syncToolActions checked=" << target->text();
+    setBlurSidebarVisible(m_tool == Tool::Blur);
+    qInfo() << "AnnotateWindow: syncToolActions checked=" << target->text()
+            << "blurSidebar=" << (m_tool == Tool::Blur);
 }
 
 QRectF AnnotateWindow::shotRect() const
@@ -2288,6 +2339,485 @@ void AnnotateWindow::updateBlurSliderVisibility()
     }
     layoutToolsBar();
     qInfo() << "AnnotateWindow: blur slider visible=" << on << "action=" << (m_blurSliderAction != nullptr);
+}
+
+// ─── Ariadne's Thread [AT-0396] ─────────────────────
+// What: Blur sidebar with Automatic revealing type checkboxes
+// Why:  Click Blur opens settings; Automatic persists via LocalStore
+// Date: 2026-09-03
+// Related: [AT-0390] app→LocalStore.cpp:blurAutomatic, [AT-0397] AnnotateWindow.cpp:commitBlurRect
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::ensureBlurSidebar()
+{
+    if (m_blurSidebar) {
+        qInfo() << "AnnotateWindow: blur sidebar already created";
+        return;
+    }
+    m_blurSidebar = new QFrame(this);
+    m_blurSidebar->setObjectName(QStringLiteral("BlurSidebar"));
+    m_blurSidebar->setAttribute(Qt::WA_StyledBackground, true);
+    m_blurSidebar->setFixedWidth(240);
+    m_blurSidebar->setMinimumWidth(240);
+    m_blurSidebar->setMaximumWidth(240);
+    m_blurSidebar->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    m_blurSidebar->setFrameShape(QFrame::NoFrame);
+    m_blurSidebar->setAutoFillBackground(true);
+    m_blurSidebar->setStyleSheet(QStringLiteral(
+        "#BlurSidebar { background: #2c2c2e; border-left: 1px solid #6e6e73; }"
+        "#BlurSidebar QLabel { color: #f5f5f7; font-weight: 600; }"
+        "#BlurSidebar QCheckBox { color: #f5f5f7; spacing: 8px; }"));
+    auto *lay = new QVBoxLayout(m_blurSidebar);
+    lay->setContentsMargins(16, 18, 16, 18);
+    lay->setSpacing(10);
+    auto *title = new QLabel(QStringLiteral("Blur"), m_blurSidebar);
+    m_blurAutomaticBox = new QCheckBox(QStringLiteral("Automatic"), m_blurSidebar);
+    m_blurAutomaticBox->setFocusPolicy(Qt::NoFocus);
+    m_blurTypeGroup = new QWidget(m_blurSidebar);
+    auto *typeLay = new QVBoxLayout(m_blurTypeGroup);
+    typeLay->setContentsMargins(16, 0, 0, 0);
+    typeLay->setSpacing(8);
+    m_blurFacesBox = new QCheckBox(QStringLiteral("Faces"), m_blurTypeGroup);
+    m_blurPhonesBox = new QCheckBox(QStringLiteral("Phone numbers"), m_blurTypeGroup);
+    m_blurEmailsBox = new QCheckBox(QStringLiteral("Emails"), m_blurTypeGroup);
+    m_blurApiKeysBox = new QCheckBox(QStringLiteral("API keys"), m_blurTypeGroup);
+    m_blurFacesBox->setFocusPolicy(Qt::NoFocus);
+    m_blurPhonesBox->setFocusPolicy(Qt::NoFocus);
+    m_blurEmailsBox->setFocusPolicy(Qt::NoFocus);
+    m_blurApiKeysBox->setFocusPolicy(Qt::NoFocus);
+    typeLay->addWidget(m_blurFacesBox);
+    typeLay->addWidget(m_blurPhonesBox);
+    typeLay->addWidget(m_blurEmailsBox);
+    typeLay->addWidget(m_blurApiKeysBox);
+    lay->addWidget(title);
+    lay->addWidget(m_blurAutomaticBox);
+    lay->addWidget(m_blurTypeGroup);
+    lay->addStretch(1);
+
+    {
+        QSignalBlocker blockAuto(m_blurAutomaticBox);
+        QSignalBlocker blockFaces(m_blurFacesBox);
+        QSignalBlocker blockPhones(m_blurPhonesBox);
+        QSignalBlocker blockEmails(m_blurEmailsBox);
+        QSignalBlocker blockKeys(m_blurApiKeysBox);
+        m_blurAutomaticBox->setChecked(LocalStore::blurAutomatic());
+        m_blurFacesBox->setChecked(LocalStore::blurAutoFaces());
+        m_blurPhonesBox->setChecked(LocalStore::blurAutoPhones());
+        m_blurEmailsBox->setChecked(LocalStore::blurAutoEmails());
+        m_blurApiKeysBox->setChecked(LocalStore::blurAutoApiKeys());
+    }
+    connect(m_blurAutomaticBox, &QCheckBox::toggled, this, &AnnotateWindow::onBlurAutomaticToggled);
+    connect(m_blurFacesBox, &QCheckBox::toggled, this, &AnnotateWindow::onBlurFacesToggled);
+    connect(m_blurPhonesBox, &QCheckBox::toggled, this, &AnnotateWindow::onBlurPhonesToggled);
+    connect(m_blurEmailsBox, &QCheckBox::toggled, this, &AnnotateWindow::onBlurEmailsToggled);
+    connect(m_blurApiKeysBox, &QCheckBox::toggled, this, &AnnotateWindow::onBlurApiKeysToggled);
+    updateBlurTypeVisibility();
+    qInfo() << "AnnotateWindow: blur sidebar created automatic=" << m_blurAutomaticBox->isChecked()
+            << "faces=" << m_blurFacesBox->isChecked() << "phones=" << m_blurPhonesBox->isChecked()
+            << "emails=" << m_blurEmailsBox->isChecked() << "apiKeys=" << m_blurApiKeysBox->isChecked();
+}
+
+void AnnotateWindow::updateBlurTypeVisibility()
+{
+    const bool on = m_blurAutomaticBox && m_blurAutomaticBox->isChecked();
+    if (m_blurTypeGroup) {
+        m_blurTypeGroup->setVisible(on);
+    }
+    qInfo() << "AnnotateWindow: blur type checkboxes visible=" << on;
+}
+
+void AnnotateWindow::setBlurSidebarVisible(bool on)
+{
+    if (!m_blurSidebar) {
+        qWarning() << "AnnotateWindow: setBlurSidebarVisible missing sidebar on=" << on;
+        return;
+    }
+    qInfo() << "AnnotateWindow: setBlurSidebarVisible on=" << on << "hidden=" << m_blurSidebar->isHidden()
+            << "geo=" << m_blurSidebar->geometry()
+            << "viewGeo=" << (m_view ? m_view->geometry() : QRect())
+            << "body=" << (m_editorBody ? m_editorBody->size() : QSize());
+    m_blurSidebar->setVisible(on);
+    if (m_editorBody && m_editorBody->layout()) {
+        m_editorBody->layout()->activate();
+        qInfo() << "AnnotateWindow: blur sidebar layout activated on=" << on
+                << "sidebarGeo=" << m_blurSidebar->geometry()
+                << "viewGeo=" << (m_view ? m_view->geometry() : QRect())
+                << "body=" << m_editorBody->size();
+    }
+    relayoutEditorChrome();
+}
+
+void AnnotateWindow::relayoutEditorChrome()
+{
+    fitShotToWindow();
+    layoutPhotoOverlay();
+    layoutUpdateCard();
+    layoutToolsBar();
+    layoutPhotoChoice();
+    qInfo() << "AnnotateWindow: relayout editor chrome view=" << (m_view ? m_view->size() : QSize());
+}
+
+void AnnotateWindow::onBlurAutomaticToggled(bool on)
+{
+    LocalStore::setBlurAutomatic(on);
+    qInfo() << "AnnotateWindow: Automatic toggled=" << on;
+    updateBlurTypeVisibility();
+    if (on) {
+        maybeStartAutoRedact();
+    } else {
+        removeAllAutoBlur();
+    }
+}
+
+void AnnotateWindow::onBlurFacesToggled(bool on)
+{
+    onBlurTypeToggled(SensitiveKind::Face, on);
+}
+
+void AnnotateWindow::onBlurPhonesToggled(bool on)
+{
+    onBlurTypeToggled(SensitiveKind::Phone, on);
+}
+
+void AnnotateWindow::onBlurEmailsToggled(bool on)
+{
+    onBlurTypeToggled(SensitiveKind::Email, on);
+}
+
+void AnnotateWindow::onBlurApiKeysToggled(bool on)
+{
+    onBlurTypeToggled(SensitiveKind::ApiKey, on);
+}
+
+void AnnotateWindow::onBlurTypeToggled(SensitiveKind kind, bool on)
+{
+    if (kind == SensitiveKind::Face) {
+        LocalStore::setBlurAutoFaces(on);
+    } else if (kind == SensitiveKind::Phone) {
+        LocalStore::setBlurAutoPhones(on);
+    } else if (kind == SensitiveKind::Email) {
+        LocalStore::setBlurAutoEmails(on);
+    } else if (kind == SensitiveKind::ApiKey) {
+        LocalStore::setBlurAutoApiKeys(on);
+    } else {
+        qWarning() << "AnnotateWindow: onBlurTypeToggled unknown kind=" << static_cast<int>(kind);
+        return;
+    }
+    qInfo() << "AnnotateWindow: blur type kind=" << static_cast<int>(kind) << "on=" << on
+            << "automatic=" << LocalStore::blurAutomatic();
+    if (!LocalStore::blurAutomatic()) {
+        qInfo() << "AnnotateWindow: type toggle ignored, Automatic off";
+        return;
+    }
+    if (on) {
+        ensureSensitiveDetect();
+    } else {
+        removeAutoBlurOfKind(kind);
+    }
+}
+
+bool AnnotateWindow::autoBlurKindEnabled(SensitiveKind kind) const
+{
+    if (!LocalStore::blurAutomatic()) {
+        return false;
+    }
+    if (kind == SensitiveKind::Face) {
+        return LocalStore::blurAutoFaces();
+    }
+    if (kind == SensitiveKind::Phone) {
+        return LocalStore::blurAutoPhones();
+    }
+    if (kind == SensitiveKind::Email) {
+        return LocalStore::blurAutoEmails();
+    }
+    if (kind == SensitiveKind::ApiKey) {
+        return LocalStore::blurAutoApiKeys();
+    }
+    return false;
+}
+
+int AnnotateWindow::enabledSensitiveMask() const
+{
+    int mask = 0;
+    if (!LocalStore::blurAutomatic()) {
+        qInfo() << "AnnotateWindow: enabledSensitiveMask automatic off";
+        return 0;
+    }
+    if (LocalStore::blurAutoFaces()) {
+        mask |= kSensitiveKindFace;
+    }
+    if (LocalStore::blurAutoPhones()) {
+        mask |= kSensitiveKindPhone;
+    }
+    if (LocalStore::blurAutoEmails()) {
+        mask |= kSensitiveKindEmail;
+    }
+    if (LocalStore::blurAutoApiKeys()) {
+        mask |= kSensitiveKindApiKey;
+    }
+    qInfo() << "AnnotateWindow: enabledSensitiveMask=" << mask;
+    return mask;
+}
+
+bool AnnotateWindow::blurOverlapsExisting(const QRect &rect) const
+{
+    if (!m_scene || rect.isEmpty()) {
+        return false;
+    }
+    const QRectF candidate(rect);
+    const qreal candArea = candidate.width() * candidate.height();
+    if (candArea <= 0) {
+        return false;
+    }
+    const auto items = m_scene->items(Qt::AscendingOrder);
+    for (QGraphicsItem *item : items) {
+        if (!item || annotateKind(item) != AnnotateKind::Blur) {
+            continue;
+        }
+        const QRectF existing = itemSceneBox(item);
+        const QRectF inter = candidate.intersected(existing);
+        if (inter.isEmpty()) {
+            continue;
+        }
+        const qreal unionArea = candArea + existing.width() * existing.height() - inter.width() * inter.height();
+        if (unionArea <= 0) {
+            continue;
+        }
+        const qreal iou = (inter.width() * inter.height()) / unionArea;
+        qInfo() << "AnnotateWindow: blur IoU=" << iou << "candidate=" << rect << "existing=" << existing;
+        if (iou > 0.5) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ─── Ariadne's Thread [AT-0397] ─────────────────────
+// What: Shared blur commit for drag and auto-redact boxes
+// Why:  Auto Blur must reuse the existing Blur item path
+// Date: 2026-09-03
+// Related: [AT-0393] AnnotateItems.cpp:setBlurRedactKind, [AT-0011] AnnotationCommands.h:AddItemCommand
+// ─────────────────────────────────────────────────────
+QGraphicsItem *AnnotateWindow::commitBlurRect(const QRect &clipped, int radius, SensitiveKind redactKind,
+                                              bool pushUndo)
+{
+    const QRect shot = shotRect().toRect();
+    const QRect box = clipped.intersected(shot);
+    if (box.width() < 1 || box.height() < 1) {
+        qInfo() << "AnnotateWindow: commitBlurRect skip empty" << clipped << "shot=" << shot
+                << "kind=" << static_cast<int>(redactKind);
+        return nullptr;
+    }
+    const QImage source = shotImage().copy(box.translated(-shot.topLeft()));
+    const QImage patch = boxBlur(source, radius);
+    if (patch.isNull()) {
+        qWarning() << "AnnotateWindow: commitBlurRect blur failed" << box << "radius=" << radius;
+        return nullptr;
+    }
+    auto *pix = new QGraphicsPixmapItem(QPixmap::fromImage(patch));
+    pix->setPos(box.topLeft());
+    setAnnotateKind(pix, AnnotateKind::Blur);
+    setBlurSource(pix, source);
+    pix->setData(kAnnotateRoleBlurRadius, radius);
+    setBlurRedactKind(pix, static_cast<int>(redactKind));
+    if (pushUndo && m_undo) {
+        m_undo->push(new AddItemCommand(m_scene, pix));
+    } else if (m_scene) {
+        m_scene->addItem(pix);
+    }
+    qInfo() << "AnnotateWindow: commitBlurRect radius=" << radius << box
+            << "kind=" << static_cast<int>(redactKind) << "pushUndo=" << pushUndo;
+    if (redactKind == SensitiveKind::None) {
+        selectAnnotation(pix);
+        qInfo() << "AnnotateWindow: committed blur selected=" << pix->isSelected();
+    }
+    return pix;
+}
+
+void AnnotateWindow::maybeStartAutoRedact()
+{
+    if (m_redactSessionRestored) {
+        qInfo() << "AnnotateWindow: maybeStartAutoRedact skip restored session";
+        return;
+    }
+    if (!LocalStore::blurAutomatic()) {
+        qInfo() << "AnnotateWindow: maybeStartAutoRedact Automatic off";
+        return;
+    }
+    if (enabledSensitiveMask() == 0) {
+        qInfo() << "AnnotateWindow: maybeStartAutoRedact no types enabled";
+        return;
+    }
+    ensureSensitiveDetect();
+}
+
+void AnnotateWindow::ensureSensitiveDetect()
+{
+    if (m_redactCacheReady) {
+        qInfo() << "AnnotateWindow: sensitive cache ready hits=" << m_redactHits.size();
+        applyEnabledAutoBlur();
+        return;
+    }
+    if (m_redactBusy) {
+        qInfo() << "AnnotateWindow: sensitive detect already running generation=" << m_redactGeneration;
+        return;
+    }
+    startSensitiveDetect();
+}
+
+void AnnotateWindow::startSensitiveDetect()
+{
+    if (m_source.isNull()) {
+        qWarning() << "AnnotateWindow: startSensitiveDetect empty source";
+        return;
+    }
+    const int mask = kSensitiveKindAll;
+    const int gen = ++m_redactGeneration;
+    m_redactBusy = true;
+    const QImage image = m_source;
+    QPointer<AnnotateWindow> self = this;
+    qInfo() << "AnnotateWindow: startSensitiveDetect generation=" << gen << "size=" << image.size()
+            << "mask=" << mask;
+    QThread *thread = QThread::create([image, gen, mask, self]() {
+        qInfo() << "AnnotateWindow: sensitive worker start generation=" << gen << "size=" << image.size();
+        QString error;
+        const QList<SensitiveHit> hits = detectSensitive(image, mask, &error);
+        qInfo() << "AnnotateWindow: sensitive worker done generation=" << gen << "hits=" << hits.size()
+                << "error=" << error;
+        QMetaObject::invokeMethod(qApp, [self, gen, hits, error]() {
+            if (!self) {
+                qInfo() << "AnnotateWindow: auto redact drop, window gone generation=" << gen;
+                return;
+            }
+            self->onAutoRedactFinished(gen, hits, error);
+        }, Qt::QueuedConnection);
+    });
+    if (!thread) {
+        m_redactBusy = false;
+        qWarning() << "AnnotateWindow: QThread::create failed generation=" << gen;
+        return;
+    }
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+    qInfo() << "AnnotateWindow: sensitive thread started generation=" << gen;
+}
+
+void AnnotateWindow::onAutoRedactFinished(int generation, const QList<SensitiveHit> &hits, const QString &error)
+{
+    qInfo() << "AnnotateWindow: onAutoRedactFinished generation=" << generation
+            << "current=" << m_redactGeneration << "hits=" << hits.size() << "error=" << error;
+    if (generation != m_redactGeneration) {
+        qInfo() << "AnnotateWindow: drop stale auto redact generation=" << generation;
+        return;
+    }
+    m_redactBusy = false;
+    if (!error.isEmpty()) {
+        qWarning() << "AnnotateWindow: auto redact error=" << error;
+        statusBar()->showMessage(QStringLiteral("Could not scan this screenshot."), 4000);
+    }
+    m_redactHits = hits;
+    m_redactCacheReady = true;
+    applyEnabledAutoBlur();
+}
+
+void AnnotateWindow::applyEnabledAutoBlur()
+{
+    if (!m_undo || !m_scene) {
+        qWarning() << "AnnotateWindow: applyEnabledAutoBlur missing undo/scene";
+        return;
+    }
+    if (!LocalStore::blurAutomatic()) {
+        qInfo() << "AnnotateWindow: applyEnabledAutoBlur Automatic off";
+        return;
+    }
+    int added = 0;
+    QList<SensitiveHit> pending;
+    for (const SensitiveHit &hit : m_redactHits) {
+        if (!autoBlurKindEnabled(hit.kind)) {
+            continue;
+        }
+        if (blurOverlapsExisting(hit.rect)) {
+            qInfo() << "AnnotateWindow: skip overlapping auto blur" << hit.rect
+                    << "kind=" << static_cast<int>(hit.kind);
+            continue;
+        }
+        pending.append(hit);
+    }
+    if (pending.isEmpty()) {
+        qInfo() << "AnnotateWindow: applyEnabledAutoBlur nothing to add hits=" << m_redactHits.size();
+        return;
+    }
+    m_undo->beginMacro(QStringLiteral("Auto blur"));
+    for (const SensitiveHit &hit : pending) {
+        if (blurOverlapsExisting(hit.rect)) {
+            qInfo() << "AnnotateWindow: skip overlapping auto blur after pending" << hit.rect
+                    << "kind=" << static_cast<int>(hit.kind);
+            continue;
+        }
+        if (commitBlurRect(hit.rect, m_blurRadius, hit.kind, true)) {
+            ++added;
+        }
+    }
+    m_undo->endMacro();
+    qInfo() << "AnnotateWindow: applyEnabledAutoBlur added=" << added << "hits=" << m_redactHits.size();
+}
+
+void AnnotateWindow::removeAutoBlurOfKind(SensitiveKind kind)
+{
+    if (!m_scene || !m_undo) {
+        qWarning() << "AnnotateWindow: removeAutoBlurOfKind missing scene/undo kind="
+                   << static_cast<int>(kind);
+        return;
+    }
+    QList<QGraphicsItem *> doomed;
+    const auto items = m_scene->items(Qt::AscendingOrder);
+    for (QGraphicsItem *item : items) {
+        if (!item || item->parentItem() || annotateKind(item) != AnnotateKind::Blur) {
+            continue;
+        }
+        if (blurRedactKind(item) != static_cast<int>(kind)) {
+            continue;
+        }
+        doomed.append(item);
+    }
+    qInfo() << "AnnotateWindow: removeAutoBlurOfKind kind=" << static_cast<int>(kind)
+            << "count=" << doomed.size();
+    if (doomed.isEmpty()) {
+        return;
+    }
+    m_undo->beginMacro(QStringLiteral("Remove auto blur"));
+    for (QGraphicsItem *item : doomed) {
+        m_undo->push(new RemoveItemCommand(m_scene, item));
+    }
+    m_undo->endMacro();
+}
+
+void AnnotateWindow::removeAllAutoBlur()
+{
+    qInfo() << "AnnotateWindow: removeAllAutoBlur";
+    if (!m_scene || !m_undo) {
+        qWarning() << "AnnotateWindow: removeAllAutoBlur missing scene/undo";
+        return;
+    }
+    QList<QGraphicsItem *> doomed;
+    const auto items = m_scene->items(Qt::AscendingOrder);
+    for (QGraphicsItem *item : items) {
+        if (!item || item->parentItem() || annotateKind(item) != AnnotateKind::Blur) {
+            continue;
+        }
+        if (blurRedactKind(item) == static_cast<int>(SensitiveKind::None)) {
+            continue;
+        }
+        doomed.append(item);
+    }
+    qInfo() << "AnnotateWindow: removeAllAutoBlur count=" << doomed.size();
+    if (doomed.isEmpty()) {
+        return;
+    }
+    m_undo->beginMacro(QStringLiteral("Remove auto blur"));
+    for (QGraphicsItem *item : doomed) {
+        m_undo->push(new RemoveItemCommand(m_scene, item));
+    }
+    m_undo->endMacro();
 }
 
 // ─── Ariadne's Thread [AT-0334] ─────────────────────
@@ -4694,19 +5224,7 @@ void AnnotateWindow::onSceneReleased(const QPointF &pos)
         delete m_draft;
         m_draft = nullptr;
         const QRect clipped = rect.intersected(shot);
-        const QImage source = shotImage().copy(clipped.translated(-shot.topLeft()));
-        const QImage patch = boxBlur(source, m_blurRadius);
-        if (!patch.isNull()) {
-            auto *pix = new QGraphicsPixmapItem(QPixmap::fromImage(patch));
-            pix->setPos(clipped.topLeft());
-            setAnnotateKind(pix, AnnotateKind::Blur);
-            setBlurSource(pix, source);
-            pix->setData(kAnnotateRoleBlurRadius, m_blurRadius);
-            m_undo->push(new AddItemCommand(m_scene, pix));
-            selectAnnotation(pix);
-            qInfo() << "AnnotateWindow: committed blur radius=" << m_blurRadius << clipped
-                    << "selected=" << pix->isSelected();
-        }
+        commitBlurRect(clipped, m_blurRadius, SensitiveKind::None, true);
         m_drawing = false;
         return;
     }
@@ -4997,6 +5515,7 @@ QJsonObject AnnotateWindow::serializeSession(QHash<QString, QImage> *assets) con
             assets->insert(name, source.isNull() ? pix->pixmap().toImage() : source);
             obj.insert(QStringLiteral("asset"), name);
             obj.insert(QStringLiteral("radius"), blurRadius(item));
+            obj.insert(QStringLiteral("redactKind"), blurRedactKind(item));
         } else if (kind == AnnotateKind::Photo) {
             auto *photo = qgraphicsitem_cast<AnnotatePhotoItem *>(item);
             if (!photo || !assets) {
@@ -5111,6 +5630,7 @@ bool AnnotateWindow::restoreItems(const QJsonArray &items, const QHash<QString, 
             setAnnotateKind(pix, AnnotateKind::Blur);
             setBlurSource(pix, source);
             pix->setData(kAnnotateRoleBlurRadius, radius);
+            setBlurRedactKind(pix, obj.value(QStringLiteral("redactKind")).toInt(0));
             m_scene->addItem(pix);
             ++restored;
         } else if (kind == AnnotateKind::Photo) {
@@ -5165,6 +5685,8 @@ bool AnnotateWindow::restoreSession(const QJsonObject &json, const QHash<QString
     if (!restoreItems(json.value(QStringLiteral("items")).toArray(), assets, errorCode)) {
         return false;
     }
+    m_redactSessionRestored = true;
+    qInfo() << "AnnotateWindow: restoreSession skip auto redact";
     if (m_undo) {
         m_undo->clear();
     }
