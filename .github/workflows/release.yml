@@ -152,7 +152,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/appcast.xml packaging/macos/appcast.xml
+          git add docs/appcast.xml docs/appcast-x86_64.xml packaging/macos/appcast.xml packaging/macos/appcast-x86_64.xml
           if git diff --cached --quiet; then
             echo "package_sparkle: appcast unchanged"
           else

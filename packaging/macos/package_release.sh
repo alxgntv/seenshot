@@ -1,17 +1,19 @@
 #!/bin/zsh
 set -euo pipefail
 
-# ─── Ariadne's Thread [AT-0389] ─────────────────────
-# What: Build arm64 + x86_64 DMGs, notarize both, publish one Sparkle appcast
-# Why:  Intel MacBooks need x86_64; Apple Silicon keeps arm64; Sparkle picks the right enclosure
-# Date: 2026-09-03
-# Related: [AT-0389] packaging/macos/package_sparkle.sh, [AT-0121] .github/workflows/release.yml
+# ─── Ariadne's Thread [AT-0421] ─────────────────────
+# What: Build arm64 + x86_64 DMGs and publish two independent Sparkle appcasts
+# Why:  Sparkle rejects duplicate bundle versions in one feed; Intel and Apple Silicon need separate channels
+# Date: 2026-09-04
+# Related: [AT-0389] packaging/macos/package_sparkle.sh, [AT-0421] docs/appcast-x86_64.xml
 # ─────────────────────────────────────────────────────
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 INFO_PLIST="${ROOT}/packaging/macos/Info.plist"
-DOCS_APPCAST="${ROOT}/docs/appcast.xml"
-PACK_APPCAST="${ROOT}/packaging/macos/appcast.xml"
+DOCS_APPCAST_ARM64="${ROOT}/docs/appcast.xml"
+PACK_APPCAST_ARM64="${ROOT}/packaging/macos/appcast.xml"
+DOCS_APPCAST_X86="${ROOT}/docs/appcast-x86_64.xml"
+PACK_APPCAST_X86="${ROOT}/packaging/macos/appcast-x86_64.xml"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-alxgntv/seenshot}"
 SPARKLE_BIN="${SPARKLE_BIN:-}"
 SPARKLE_ACCOUNT="${SPARKLE_ACCOUNT:-seenshot}"
@@ -59,6 +61,33 @@ build_arch() {
     "${ROOT}/packaging/macos/package_sparkle.sh"
 }
 
+generate_appcast_for() {
+  local label="$1"
+  local dmg_path="$2"
+  local docs_out="$3"
+  local pack_out="$4"
+  local archives
+  archives="$(mktemp -d)"
+  cp "${dmg_path}" "${archives}/"
+  if [[ -f "${docs_out}" ]]; then
+    cp "${docs_out}" "${archives}/appcast.xml"
+  fi
+  local prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/"
+  log "generate_appcast ${label} prefix=${prefix} dmg=$(basename "${dmg_path}")"
+  "${SPARKLE_BIN}/generate_appcast" \
+    "${SIGN_ARGS[@]}" \
+    --download-url-prefix "${prefix}" \
+    --maximum-deltas 0 \
+    --maximum-versions 20 \
+    -o "${archives}/appcast.xml" \
+    "${archives}"
+  mkdir -p "${ROOT}/docs" "${ROOT}/packaging/macos"
+  cp "${archives}/appcast.xml" "${docs_out}"
+  cp "${archives}/appcast.xml" "${pack_out}"
+  log "wrote ${label} appcast ${docs_out}"
+  rm -rf "${archives}"
+}
+
 build_arch arm64 "${QT_PREFIX_ARM64:-/opt/homebrew/opt/qtbase}"
 ensure_x86_qt
 build_arch x86_64 "${QT_PREFIX_X86_64:-/usr/local/opt/qtbase}"
@@ -93,26 +122,8 @@ else
   log "using ed key file"
 fi
 
-ARCHIVES="$(mktemp -d)"
-cp "${DMG_ARM64}" "${ARCHIVES}/"
-cp "${DMG_X86}" "${ARCHIVES}/"
-if [[ -f "${DOCS_APPCAST}" ]]; then
-  cp "${DOCS_APPCAST}" "${ARCHIVES}/appcast.xml"
-fi
-PREFIX="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/"
-log "generate_appcast prefix=${PREFIX} archives=$(ls -1 "${ARCHIVES}")"
-"${SPARKLE_BIN}/generate_appcast" \
-  "${SIGN_ARGS[@]}" \
-  --download-url-prefix "${PREFIX}" \
-  --maximum-deltas 0 \
-  --maximum-versions 20 \
-  -o "${ARCHIVES}/appcast.xml" \
-  "${ARCHIVES}"
-mkdir -p "${ROOT}/docs"
-cp "${ARCHIVES}/appcast.xml" "${DOCS_APPCAST}"
-cp "${ARCHIVES}/appcast.xml" "${PACK_APPCAST}"
-log "wrote ${DOCS_APPCAST}"
-rm -rf "${ARCHIVES}"
+generate_appcast_for "arm64" "${DMG_ARM64}" "${DOCS_APPCAST_ARM64}" "${PACK_APPCAST_ARM64}"
+generate_appcast_for "x86_64" "${DMG_X86}" "${DOCS_APPCAST_X86}" "${PACK_APPCAST_X86}"
 
 if [[ "${SPARKLE_ED_KEY_FILE}" == /tmp/* ]] || [[ "${SPARKLE_ED_KEY_FILE}" == /var/folders/* ]]; then
   rm -f "${SPARKLE_ED_KEY_FILE}"
@@ -120,4 +131,4 @@ fi
 
 echo "DMG_ARM64=${DMG_ARM64}"
 echo "DMG_X86_64=${DMG_X86}"
-log "done version=${VERSION}"
+log "done version=${VERSION} feeds=appcast.xml,appcast-x86_64.xml"

@@ -115,6 +115,19 @@ if otool -l "${APP}/Contents/MacOS/SeenShot" | grep -q '/usr/local/opt/qtbase/li
   log "delete homebrew x86_64 rpath"
   /usr/bin/install_name_tool -delete_rpath /usr/local/opt/qtbase/lib "${APP}/Contents/MacOS/SeenShot" || true
 fi
+# ─── Ariadne's Thread [AT-0421] ─────────────────────
+# What: arm64 uses appcast.xml; x86_64 uses appcast-x86_64.xml
+# Why:  Sparkle cannot ship two same-version DMGs in one feed; Intel needs its own update channel
+# Date: 2026-09-04
+# Related: [AT-0421] packaging/macos/package_release.sh, [AT-0421] CMakeLists.txt:SEENSHOT_SPARKLE_FEED_URL
+# ─────────────────────────────────────────────────────
+if [[ "${SEENSHOT_ARCH}" == "x86_64" ]]; then
+  SPARKLE_FEED_URL="https://seenshot.app/appcast-x86_64.xml"
+else
+  SPARKLE_FEED_URL="https://seenshot.app/appcast.xml"
+fi
+log "set SUFeedURL arch=${SEENSHOT_ARCH} feed=${SPARKLE_FEED_URL}"
+/usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "${APP}/Contents/Info.plist"
 
 sign_nested() {
   local path="$1"

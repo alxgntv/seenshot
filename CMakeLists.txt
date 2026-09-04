@@ -21,10 +21,12 @@ if(NOT CMAKE_OSX_ARCHITECTURES)
 endif()
 if(SEENSHOT_MAC_ARCH STREQUAL "x86_64")
     set(SEENSHOT_QT_HOMEBREW_RPATH "/usr/local/opt/qtbase/lib")
+    set(SEENSHOT_SPARKLE_FEED_URL "https://seenshot.app/appcast-x86_64.xml")
 else()
     set(SEENSHOT_QT_HOMEBREW_RPATH "/opt/homebrew/opt/qtbase/lib")
+    set(SEENSHOT_SPARKLE_FEED_URL "https://seenshot.app/appcast.xml")
 endif()
-message(STATUS "SeenShot macOS arch=${CMAKE_OSX_ARCHITECTURES} qt_rpath=${SEENSHOT_QT_HOMEBREW_RPATH}")
+message(STATUS "SeenShot macOS arch=${CMAKE_OSX_ARCHITECTURES} qt_rpath=${SEENSHOT_QT_HOMEBREW_RPATH} sparkle_feed=${SEENSHOT_SPARKLE_FEED_URL}")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -232,6 +234,9 @@ if(APPLE)
     endif()
     message(STATUS "SeenShot codesign identity: ${SEENSHOT_CODESIGN_IDENTITY}")
     add_custom_command(TARGET SeenShot POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "SeenShot SUFeedURL arch=${SEENSHOT_MAC_ARCH} feed=${SEENSHOT_SPARKLE_FEED_URL}"
+        COMMAND /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SEENSHOT_SPARKLE_FEED_URL}"
+            "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Info.plist"
         COMMAND ${CMAKE_COMMAND} -E echo "codesign SeenShot.app identity=${SEENSHOT_CODESIGN_IDENTITY}"
         COMMAND /usr/bin/codesign --force --sign "${SEENSHOT_CODESIGN_IDENTITY}"
             --entitlements "${CMAKE_SOURCE_DIR}/packaging/macos/SeenShot.entitlements"
