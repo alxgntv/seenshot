@@ -63,6 +63,16 @@ public:
     static void setBlurAutoEmails(bool on);
     static bool blurAutoApiKeys();
     static void setBlurAutoApiKeys(bool on);
+    // ─── Ariadne's Thread [AT-0411] ─────────────────────
+    // What: Persist last Text Size and Outline for new text blocks
+    // Why:  Each new text reset to 18 / no outline
+    // Date: 2026-09-04
+    // Related: [AT-0334] app→AnnotateWindow.cpp:onTextSizeChanged, [AT-0344] app→AnnotateWindow.cpp:onTextOutlineToggled
+    // ─────────────────────────────────────────────────────
+    static int textSize();
+    static void setTextSize(int size);
+    static bool textOutline();
+    static void setTextOutline(bool on);
     static bool hasEditorSession();
     static bool writeEditorSession(const QJsonObject &json, const QImage &shot,
                                    const QHash<QString, QImage> &assets, QString *errorCode);

@@ -738,8 +738,9 @@ bool AnnotateTextItem::isResizeHandle(const QPointF &itemPos) const
 
 void AnnotateTextItem::beginEdit(const QPointF &itemPos)
 {
+    setFlag(QGraphicsItem::ItemIsFocusable, true);
     setTextInteractionFlags(Qt::TextEditorInteraction);
-    setFocus(Qt::MouseFocusReason);
+    setFocus(Qt::OtherFocusReason);
     QTextCursor cursor = textCursor();
     cursor.clearSelection();
     int hit = -1;
@@ -755,11 +756,12 @@ void AnnotateTextItem::beginEdit(const QPointF &itemPos)
     if (hit >= 0) {
         cursor.setPosition(hit);
     } else {
-        cursor.movePosition(QTextCursor::End);
+        cursor.movePosition(QTextCursor::Start);
     }
     setTextCursor(cursor);
     qInfo() << "AnnotateTextItem: beginEdit cursor=" << textCursor().position()
-            << "hasFocus=" << hasFocus() << "flags=" << int(textInteractionFlags());
+            << "hasFocus=" << hasFocus() << "flags=" << int(textInteractionFlags())
+            << "focusable=" << bool(flags() & QGraphicsItem::ItemIsFocusable);
 }
 
 void AnnotateTextItem::endEdit()
@@ -1101,6 +1103,12 @@ QGraphicsRectItem *stepsRectOf(QGraphicsItem *item)
 // Date: 2026-08-26
 // Related: [AT-0134] AnnotateItems.cpp:placeHighlightStepBadge, [AT-0056] AnnotateWindow.cpp:applyCanvasChrome
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0410] ─────────────────────
+// What: Use sceneRect as Steps clamp when it contains the shot (Background on)
+// Why:  The frame is the edit area; badges on the pad must stay on canvas
+// Date: 2026-09-04
+// Related: [AT-0151] AnnotateItems.cpp:shotRectOfItem, [AT-0410] AnnotateWindow.cpp:editRect
+// ─────────────────────────────────────────────────────
 QRectF shotRectOfItem(const QGraphicsItem *item)
 {
     if (!item) {
@@ -1119,9 +1127,11 @@ QRectF shotRectOfItem(const QGraphicsItem *item)
             continue;
         }
         const QRectF shot = photo->mapRectToScene(photo->boundingRect());
-        qInfo() << "shotRectOfItem: shot=" << shot << "bounds=" << photo->boundingRect()
-                << "pixmap=" << photo->pixmap().size() << "sceneRect=" << scene->sceneRect();
-        return shot;
+        const QRectF sceneRect = scene->sceneRect();
+        const QRectF edit = (!sceneRect.isEmpty() && sceneRect.contains(shot)) ? sceneRect : shot;
+        qInfo() << "shotRectOfItem: photo=" << shot << "bounds=" << photo->boundingRect()
+                << "pixmap=" << photo->pixmap().size() << "sceneRect=" << sceneRect << "edit=" << edit;
+        return edit;
     }
     qWarning() << "shotRectOfItem: no ShotPhotoItem sceneRect=" << scene->sceneRect();
     return QRectF();

@@ -61,6 +61,7 @@
 #include <QLineF>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMargins>
 #include <QMessageBox>
 #include <QUrl>
 #include <QMouseEvent>
@@ -259,6 +260,17 @@ public:
         qInfo() << "EditorView: viewport update mode=" << viewportUpdateMode();
     }
 
+    QMargins fitViewportMargins() const
+    {
+        return viewportMargins();
+    }
+
+    void setFitViewportMargins(const QMargins &margins)
+    {
+        qInfo() << "EditorView: setFitViewportMargins" << margins << "was=" << viewportMargins();
+        setViewportMargins(margins);
+    }
+
 protected:
     void mousePressEvent(QMouseEvent *event) override
     {
@@ -392,7 +404,10 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     , m_cloud(cloud)
     , m_fileId(makeShotFileId())
 {
-    qInfo() << "AnnotateWindow: constructed fileId=" << m_fileId;
+    m_textSize = LocalStore::textSize();
+    m_textOutline = LocalStore::textOutline();
+    qInfo() << "AnnotateWindow: constructed fileId=" << m_fileId << "textSize=" << m_textSize
+            << "textOutline=" << m_textOutline;
     setWindowTitle(QStringLiteral("SeenShot — Annotate"));
     // ─── Ariadne's Thread [AT-0202] ─────────────────────
     // What: Annotate window does not participate in last-window-closed quit
@@ -406,6 +421,7 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     m_background = new QGraphicsRectItem();
     m_background->setZValue(-2);
     m_background->setPen(Qt::NoPen);
+    m_background->setAcceptedMouseButtons(Qt::NoButton);
     m_background->setVisible(false);
     m_scene->addItem(m_background);
     m_photo = new ShotPhotoItem(QPixmap::fromImage(m_source));
@@ -1142,10 +1158,10 @@ void AnnotateWindow::showEvent(QShowEvent *event)
         m_didScreenLayout = true;
         applyWindowScreenLayout();
     }
+    layoutToolsBar();
     fitShotToWindow();
     layoutPhotoOverlay();
     layoutUpdateCard();
-    layoutToolsBar();
     layoutPhotoChoice();
     if (!m_redactShowKickoff) {
         m_redactShowKickoff = true;
@@ -1160,10 +1176,10 @@ void AnnotateWindow::showEvent(QShowEvent *event)
 void AnnotateWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
+    layoutToolsBar();
     fitShotToWindow();
     layoutPhotoOverlay();
     layoutUpdateCard();
-    layoutToolsBar();
     layoutPhotoChoice();
     qInfo() << "AnnotateWindow: resizeEvent" << event->size();
 }
@@ -1329,14 +1345,28 @@ bool AnnotateWindow::hasBackground() const
     return m_bgPreset > 0;
 }
 
+// ─── Ariadne's Thread [AT-0410] ─────────────────────
+// What: Annotation hit/clamp bounds use canvas when a Background preset is on
+// Why:  shotRect stayed on the PNG so Text/Arrow could not be placed on the frame
+// Date: 2026-09-04
+// Related: [AT-0056] AnnotateWindow.cpp:applyCanvasChrome, [AT-0329] AnnotateWindow.cpp:clipDraftToShot
+// ─────────────────────────────────────────────────────
+QRectF AnnotateWindow::editRect() const
+{
+    if (hasBackground()) {
+        return canvasRect();
+    }
+    return shotRect();
+}
+
 bool AnnotateWindow::isOnShot(const QPointF &scenePos) const
 {
-    return shotRect().contains(scenePos);
+    return editRect().contains(scenePos);
 }
 
 QPointF AnnotateWindow::clampToShot(const QPointF &scenePos) const
 {
-    const QRectF r = shotRect();
+    const QRectF r = editRect();
     return QPointF(qBound(r.left(), scenePos.x(), r.right()), qBound(r.top(), scenePos.y(), r.bottom()));
 }
 
@@ -1348,8 +1378,8 @@ QPointF AnnotateWindow::clampToShot(const QPointF &scenePos) const
 // ─────────────────────────────────────────────────────
 QRectF AnnotateWindow::clipDraftToShot(const QPointF &from, const QPointF &to) const
 {
-    const QRectF shot = shotRect();
-    const QRectF box = QRectF(from, to).normalized().intersected(shot);
+    const QRectF bounds = editRect();
+    const QRectF box = QRectF(from, to).normalized().intersected(bounds);
     return box;
 }
 
@@ -1398,21 +1428,53 @@ void AnnotateWindow::layoutToolsBar()
     layoutCopyHint();
 }
 
+// ─── Ariadne's Thread [AT-0413] ─────────────────────
+// What: Background mode fits sceneRect (pad+shot) in the viewport below the tools bar
+// Why:  80% of the full window still centered the frame under the floating toolbar
+// Date: 2026-09-04
+// Related: [AT-0050] AnnotateWindow.cpp:fitShotToWindow, [AT-0056] AnnotateWindow.cpp:applyCanvasChrome
+// ─────────────────────────────────────────────────────
 void AnnotateWindow::fitShotToWindow()
 {
     if (!m_view || !m_photo || m_source.isNull()) {
         qWarning() << "AnnotateWindow: fitShot skipped, view or source missing";
         return;
     }
+    const bool bg = hasBackground();
+    int topMargin = 0;
+    if (bg && m_toolsBar && m_toolsBar->isVisible()) {
+        const QPoint barBottom(0, m_toolsBar->geometry().bottom());
+        const QPoint inView = m_view->mapFrom(this, barBottom);
+        topMargin = qMax(0, inView.y() + 12);
+        qInfo() << "AnnotateWindow: fit bg+shot toolbar inset topMargin=" << topMargin
+                << "barGeo=" << m_toolsBar->geometry() << "viewGeo=" << m_view->geometry()
+                << "inViewY=" << inView.y();
+    } else {
+        qInfo() << "AnnotateWindow: fit shot no toolbar inset bg=" << bg
+                << "barVisible=" << (m_toolsBar && m_toolsBar->isVisible());
+    }
+    auto *editorView = static_cast<EditorView *>(m_view);
+    const QMargins oldMargins = editorView->fitViewportMargins();
+    const QMargins nextMargins(0, topMargin, 0, 0);
+    if (oldMargins != nextMargins) {
+        editorView->setFitViewportMargins(nextMargins);
+        qInfo() << "AnnotateWindow: viewportMargins" << oldMargins << "->" << nextMargins
+                << "viewport=" << m_view->viewport()->size();
+    }
     const QSize win = size();
     const QSize vp = m_view->viewport()->size();
     if (win.isEmpty() || vp.isEmpty()) {
-        qInfo() << "AnnotateWindow: fitShot skipped empty window=" << win << "view=" << vp;
+        qInfo() << "AnnotateWindow: fitShot skipped empty window=" << win << "view=" << vp
+                << "topMargin=" << topMargin;
         return;
     }
     const QRectF canvas = canvasRect();
-    const qreal targetW = win.width() * 0.8;
-    const qreal targetH = win.height() * 0.8;
+    if (canvas.width() < 1.0 || canvas.height() < 1.0) {
+        qWarning() << "AnnotateWindow: fitShot skipped empty canvas=" << canvas;
+        return;
+    }
+    const qreal targetW = (bg ? static_cast<qreal>(vp.width()) : static_cast<qreal>(win.width())) * 0.8;
+    const qreal targetH = (bg ? static_cast<qreal>(vp.height()) : static_cast<qreal>(win.height())) * 0.8;
     const qreal sx = targetW / canvas.width();
     const qreal sy = targetH / canvas.height();
     qreal scale = qMin(sx, sy);
@@ -1420,7 +1482,7 @@ void AnnotateWindow::fitShotToWindow()
     const qreal vsy = static_cast<qreal>(vp.height()) / canvas.height();
     const qreal viewMax = qMin(vsx, vsy);
     if (scale > viewMax) {
-        qInfo() << "AnnotateWindow: shot 80% window exceeds view, clamp scale" << scale << "->" << viewMax;
+        qInfo() << "AnnotateWindow: canvas 80% exceeds view, clamp scale" << scale << "->" << viewMax;
         scale = viewMax;
     }
     QTransform t;
@@ -1428,7 +1490,8 @@ void AnnotateWindow::fitShotToWindow()
     m_view->setTransform(t);
     m_view->centerOn(canvas.center());
     qInfo() << "AnnotateWindow: shot scale=" << scale << "window=" << win << "view=" << vp
-            << "canvas=" << canvas.size() << "shot=" << m_source.size();
+            << "canvas=" << canvas << "shot=" << m_source.size() << "bg=" << bg
+            << "topMargin=" << topMargin << "target=" << QSizeF(targetW, targetH);
 }
 
 qreal AnnotateWindow::maxTextWidthOnShot(const AnnotateTextItem *item) const
@@ -1436,7 +1499,7 @@ qreal AnnotateWindow::maxTextWidthOnShot(const AnnotateTextItem *item) const
     if (!item) {
         return 40;
     }
-    const qreal maxWidth = shotRect().right() - item->scenePos().x();
+    const qreal maxWidth = editRect().right() - item->scenePos().x();
     return qMax(item->minTextWidth(), maxWidth);
 }
 
@@ -1608,9 +1671,16 @@ void AnnotateWindow::onTextSizePressed()
     qInfo() << "AnnotateWindow: text size gesture start id=" << m_textSizeGestureId;
 }
 
+// ─── Ariadne's Thread [AT-0411] ─────────────────────
+// What: Write last Text Size and Outline to LocalStore on user change
+// Why:  New text on the next shot reused 18 / no outline
+// Date: 2026-09-04
+// Related: [AT-0334] AnnotateWindow.cpp:onTextSizeChanged, [AT-0390] LocalStore.cpp:setBlurAutomatic
+// ─────────────────────────────────────────────────────
 void AnnotateWindow::onTextSizeChanged(int size)
 {
     m_textSize = qBound(10, size, 48);
+    LocalStore::setTextSize(m_textSize);
     qInfo() << "AnnotateWindow: text size=" << m_textSize;
     QGraphicsItem *last = lastTextSizedItem();
     if (!last) {
@@ -1627,13 +1697,15 @@ void AnnotateWindow::onTextSizeChanged(int size)
 
 void AnnotateWindow::onTextSizeReleased()
 {
-    qInfo() << "AnnotateWindow: text size gesture end id=" << m_textSizeGestureId;
+    qInfo() << "AnnotateWindow: text size gesture end id=" << m_textSizeGestureId
+            << "persistedSize=" << m_textSize;
     m_textSizeGestureActive = false;
 }
 
 void AnnotateWindow::onTextOutlineToggled(bool on)
 {
     m_textOutline = on;
+    LocalStore::setTextOutline(m_textOutline);
     qInfo() << "AnnotateWindow: text outline=" << m_textOutline;
     QGraphicsItem *last = lastTextSizedItem();
     if (!last) {
@@ -2448,10 +2520,10 @@ void AnnotateWindow::setBlurSidebarVisible(bool on)
 
 void AnnotateWindow::relayoutEditorChrome()
 {
+    layoutToolsBar();
     fitShotToWindow();
     layoutPhotoOverlay();
     layoutUpdateCard();
-    layoutToolsBar();
     layoutPhotoChoice();
     qInfo() << "AnnotateWindow: relayout editor chrome view=" << (m_view ? m_view->size() : QSize());
 }
@@ -2912,14 +2984,13 @@ void AnnotateWindow::updateTextSizeVisibility()
     if (m_textSizeSlider) {
         QSignalBlocker blockSize(m_textSizeSlider);
         m_textSizeSlider->setValue(size);
-        m_textSize = size;
     }
     if (m_textOutlineBox) {
         QSignalBlocker blockOutline(m_textOutlineBox);
         m_textOutlineBox->setChecked(outline);
-        m_textOutline = outline;
     }
-    qInfo() << "AnnotateWindow: Size/Outline sync size=" << size << "outline=" << outline;
+    qInfo() << "AnnotateWindow: Size/Outline sync display size=" << size << "outline=" << outline
+            << "rememberedSize=" << m_textSize << "rememberedOutline=" << m_textOutline;
 }
 
 QGraphicsItem *AnnotateWindow::lastTextSizedItem() const
@@ -3058,6 +3129,7 @@ void AnnotateWindow::applyCanvasChrome()
         m_photoShadow->setEnabled(false);
         m_scene->setSceneRect(m_source.rect());
         qInfo() << "AnnotateWindow: canvas chrome off scene=" << m_scene->sceneRect();
+        fitShotToWindow();
         return;
     }
 
@@ -3082,7 +3154,8 @@ void AnnotateWindow::applyCanvasChrome()
     m_photoShadow->setEnabled(m_shadowAmount > 0);
     qInfo() << "AnnotateWindow: canvas chrome on preset=" << preset << "pad=" << pad
             << "radius=" << m_cornerRadius << "shadow=" << m_shadowAmount
-            << "from=" << a << "to=" << b << "scene=" << canvas;
+            << "from=" << a << "to=" << b << "scene=" << canvas << "editRect=" << editRect();
+    fitShotToWindow();
 }
 
 // ─── Ariadne's Thread [AT-0332] ─────────────────────
@@ -3679,7 +3752,7 @@ void AnnotateWindow::clampPhotoToShot(AnnotatePhotoItem *item) const
     if (!item) {
         return;
     }
-    const QRectF shot = shotRect();
+    const QRectF shot = editRect();
     QRectF box = item->sceneBox();
     QPointF p = item->pos();
     if (box.left() < shot.left()) {
@@ -3740,16 +3813,18 @@ AnnotateTextItem *AnnotateWindow::textItemAt(const QPointF &scenePos) const
 
 void AnnotateWindow::beginNewText(const QPointF &scenePos)
 {
+    const QPointF pos = clampToShot(scenePos);
     auto *item = new AnnotateTextItem;
-    item->setPos(scenePos);
+    item->setPos(pos);
     item->setDefaultTextColor(m_color);
     item->setTextSize(m_textSize);
     item->setTextOutline(m_textOutline);
     item->setTextWidth(qMin(item->textWidth(), maxTextWidthOnShot(item)));
     m_scene->addItem(item);
-    qInfo() << "AnnotateWindow: new text draft at" << scenePos << "color=" << m_color
-            << "width=" << item->textWidth() << "size=" << m_textSize << "outline=" << m_textOutline;
-    beginEditText(item, true, scenePos);
+    qInfo() << "AnnotateWindow: new text draft at" << pos << "raw=" << scenePos << "color=" << m_color
+            << "width=" << item->textWidth() << "size=" << m_textSize << "outline=" << m_textOutline
+            << "editRect=" << editRect() << "bg=" << hasBackground();
+    beginEditText(item, true, pos);
 }
 
 // ─── Ariadne's Thread [AT-0116] ─────────────────────
@@ -3776,6 +3851,12 @@ void AnnotateWindow::beginEditText(AnnotateTextItem *item, bool draft, const QPo
     // Date: 2026-08-28
     // Related: [AT-0333] AnnotateWindow.cpp:updateTextSizeVisibility, [AT-0116] AnnotateWindow.cpp:beginEditText
     // ─────────────────────────────────────────────────────
+    // ─── Ariadne's Thread [AT-0412] ─────────────────────
+    // What: Keep TextEditorInteraction focus after the placing click; defer a second setFocus
+    // Why:  First click created the block but skipped view mousePress, so the caret never appeared
+    // Date: 2026-09-04
+    // Related: [AT-0340] AnnotateWindow.cpp:beginEditText, [AT-0116] AnnotateWindow.cpp:beginEditText
+    // ─────────────────────────────────────────────────────
     selectAnnotation(item);
     if (m_view) {
         m_view->setFocus(Qt::MouseFocusReason);
@@ -3787,11 +3868,15 @@ void AnnotateWindow::beginEditText(AnnotateTextItem *item, bool draft, const QPo
     }
     const QPointF itemPos = item->mapFromScene(scenePos);
     item->beginEdit(itemPos);
+    if (m_view) {
+        m_view->setFocus(Qt::OtherFocusReason);
+    }
+    item->setFocus(Qt::OtherFocusReason);
     if (m_scene) {
-        m_scene->setFocus(Qt::MouseFocusReason);
-        m_scene->setFocusItem(item, Qt::MouseFocusReason);
+        m_scene->setFocusItem(item, Qt::OtherFocusReason);
         qInfo() << "AnnotateWindow: scene focusItem=" << (m_scene->focusItem() == item)
-                << "itemHasFocus=" << item->hasFocus() << "sceneActive=" << m_scene->isActive();
+                << "itemHasFocus=" << item->hasFocus() << "sceneActive=" << m_scene->isActive()
+                << "viewFocus=" << (m_view && m_view->hasFocus());
     }
     if (m_undoAction) {
         m_undoAction->setShortcut(QKeySequence());
@@ -3799,6 +3884,26 @@ void AnnotateWindow::beginEditText(AnnotateTextItem *item, bool draft, const QPo
     if (m_redoAction) {
         m_redoAction->setShortcut(QKeySequence());
     }
+    QPointer<AnnotateTextItem> held = item;
+    QTimer::singleShot(0, this, [this, held]() {
+        if (!held || m_editingText != held) {
+            qInfo() << "AnnotateWindow: skip deferred text focus gone";
+            return;
+        }
+        held->setFlag(QGraphicsItem::ItemIsFocusable, true);
+        held->setTextInteractionFlags(Qt::TextEditorInteraction);
+        if (m_view) {
+            m_view->setFocus(Qt::OtherFocusReason);
+        }
+        held->setFocus(Qt::OtherFocusReason);
+        if (m_scene) {
+            m_scene->setFocusItem(held, Qt::OtherFocusReason);
+        }
+        qInfo() << "AnnotateWindow: deferred text focus hasFocus=" << held->hasFocus()
+                << "view=" << (m_view && m_view->hasFocus())
+                << "sceneItem=" << (m_scene && m_scene->focusItem() == held)
+                << "flags=" << int(held->textInteractionFlags());
+    });
     qInfo() << "AnnotateWindow: text edit begin draft=" << draft << "oldLen=" << m_editOldText.size()
             << "itemPos=" << itemPos << "cursor=" << item->textCursor().position();
 }
@@ -4162,7 +4267,7 @@ void AnnotateWindow::clampItemToShot(QGraphicsItem *item) const
     if (!item) {
         return;
     }
-    const QRectF shot = shotRect();
+    const QRectF shot = editRect();
     QRectF box = itemSceneBox(item);
     QPointF p = item->pos();
     if (box.left() < shot.left()) {
@@ -4260,7 +4365,7 @@ void AnnotateWindow::applySelectResize(const QPointF &scenePos)
             return;
         }
         box = box.normalized();
-        const QRectF shot = shotRect();
+        const QRectF shot = editRect();
         const qreal minW = text->minTextWidth();
         if (box.width() < minW) {
             if (m_selectHandle == SelectHandle::Left || m_selectHandle == SelectHandle::TopLeft
@@ -4331,7 +4436,7 @@ void AnnotateWindow::applySelectResize(const QPointF &scenePos)
                        << static_cast<int>(m_selectHandle);
             return;
         }
-        box = box.normalized().intersected(shotRect());
+        box = box.normalized().intersected(editRect());
         if (box.width() < 8) {
             box.setWidth(8);
         }
@@ -4341,7 +4446,7 @@ void AnnotateWindow::applySelectResize(const QPointF &scenePos)
         rect->setRect(rect->mapRectFromScene(box));
         layoutHighlightChrome(rect);
         if (highlightStyle(rect) == HighlightStyle::Steps) {
-            placeHighlightStepBadge(rect, shotRect(), clamped);
+            placeHighlightStepBadge(rect, editRect(), clamped);
         }
         qInfo() << "AnnotateWindow: select resize highlight" << box << "handle="
                 << static_cast<int>(m_selectHandle);
@@ -4436,7 +4541,7 @@ void AnnotateWindow::applyPhotoScaleFromHandle(AnnotatePhotoItem *photo, const Q
     const qreal ph = pix.height();
     const QPointF oldPos = m_photoOldPos;
     const QPointF oldBR(oldPos.x() + pw * m_photoOldScale, oldPos.y() + ph * m_photoOldScale);
-    const QRectF shot = shotRect();
+    const QRectF shot = editRect();
     const SelectHandle handle = m_photoScaleHandle;
     qreal maxScale = photo->minScale();
     switch (handle) {
@@ -4819,8 +4924,9 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
         // Date: 2026-08-28
         // Related: [AT-0342] AnnotateWindow.cpp:viewPress, [AT-0328] AnnotateWindow.cpp:viewPress
         // ─────────────────────────────────────────────────────
-        qInfo() << "AnnotateWindow: press outside shot tool=" << static_cast<int>(m_tool)
-                << "style=" << static_cast<int>(m_highlightStyle) << scenePos << "shot=" << shotRect();
+        qInfo() << "AnnotateWindow: press outside edit tool=" << static_cast<int>(m_tool)
+                << "style=" << static_cast<int>(m_highlightStyle) << scenePos << "edit=" << editRect()
+                << "shot=" << shotRect() << "bg=" << hasBackground();
         if (m_editingText) {
             qInfo() << "AnnotateWindow: outside shot commit text before tool decision";
             commitTextEdit();
@@ -4962,9 +5068,9 @@ bool AnnotateWindow::viewPress(QMouseEvent *event, const QPointF &scenePos)
     }
     if (m_tool == Tool::Text) {
         beginNewText(scenePos);
-        m_textViewMouse = false;
-        qInfo() << "AnnotateWindow: new text, skip view mousePress so shot cannot steal focus";
-        return false;
+        m_textViewMouse = true;
+        qInfo() << "AnnotateWindow: new text forward press to caret scenePos=" << scenePos;
+        return true;
     }
     if (m_tool == Tool::Highlight || m_tool == Tool::Blur) {
         const AnnotateKind want =
@@ -5161,7 +5267,9 @@ void AnnotateWindow::onSceneMoved(const QPointF &pos)
         return;
     }
     if (m_tool == Tool::Highlight || m_tool == Tool::Blur) {
-        const QRectF rect = clipDraftToShot(m_dragStart, pos);
+        const QRectF rect = (m_tool == Tool::Blur)
+            ? QRectF(m_dragStart, pos).normalized().intersected(shotRect())
+            : clipDraftToShot(m_dragStart, pos);
         if (rect.width() < 1 || rect.height() < 1) {
             if (auto *item = qgraphicsitem_cast<QGraphicsRectItem *>(m_draft)) {
                 item->setVisible(false);
@@ -5231,7 +5339,7 @@ void AnnotateWindow::onSceneReleased(const QPointF &pos)
     QGraphicsItem *item = m_draft;
     m_draft = nullptr;
     if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(item)) {
-        const QRectF clipped = rect->rect().intersected(shotRect());
+        const QRectF clipped = rect->rect().intersected(editRect());
         if (clipped.width() < 1 || clipped.height() < 1 || !rect->isVisible()) {
             m_scene->removeItem(item);
             delete item;
@@ -5253,15 +5361,15 @@ void AnnotateWindow::onSceneReleased(const QPointF &pos)
     if (m_tool == Tool::Highlight && style == HighlightStyle::Steps) {
         if (auto *rect = qgraphicsitem_cast<QGraphicsRectItem *>(item)) {
             qInfo() << "AnnotateWindow: Steps commit onScene=" << (item->scene() != nullptr)
-                    << "shot=" << shotRect() << "size=" << m_textSize << "cursor=" << pos
-                    << "box=" << rect->rect();
-            attachHighlightStepBadge(rect, m_color, m_nextStepSeq, shotRect(), pos);
+                    << "edit=" << editRect() << "shot=" << shotRect() << "size=" << m_textSize
+                    << "cursor=" << pos << "box=" << rect->rect();
+            attachHighlightStepBadge(rect, m_color, m_nextStepSeq, editRect(), pos);
             applyAnnotateTextSize(rect, m_textSize);
             applyAnnotateTextOutline(rect, m_textOutline);
-            placeHighlightStepBadge(rect, shotRect(), pos);
+            placeHighlightStepBadge(rect, editRect(), pos);
             ++m_nextStepSeq;
             qInfo() << "AnnotateWindow: highlight Steps seq assigned next=" << m_nextStepSeq
-                    << "cursor=" << pos << "shot=" << shotRect();
+                    << "cursor=" << pos << "edit=" << editRect();
         }
     } else {
         m_scene->removeItem(item);
@@ -5575,12 +5683,12 @@ bool AnnotateWindow::restoreItems(const QJsonArray &items, const QHash<QString, 
             m_scene->addItem(item);
             if (highlightStyle(item) == HighlightStyle::Steps) {
                 attachHighlightStepBadge(item, itemColor(item), obj.value(QStringLiteral("stepSeq")).toInt(1),
-                                         shotRect());
+                                         editRect());
                 applyAnnotateTextSize(item, obj.value(QStringLiteral("textSize")).toInt(14));
                 applyAnnotateTextOutline(item, obj.value(QStringLiteral("textOutline")).toBool(false));
-                placeHighlightStepBadge(item, shotRect(), item->mapToScene(item->rect().center()));
+                placeHighlightStepBadge(item, editRect(), item->mapToScene(item->rect().center()));
                 qInfo() << "AnnotateWindow: restore Steps seq=" << obj.value(QStringLiteral("stepSeq")).toInt(1)
-                        << "shot=" << shotRect() << "box=" << item->rect();
+                        << "edit=" << editRect() << "box=" << item->rect();
             }
             const QString caption = obj.value(QStringLiteral("caption")).toString();
             if (!caption.isEmpty()) {

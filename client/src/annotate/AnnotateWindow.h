@@ -226,6 +226,7 @@ private:
     void beginFillTextCaption(QGraphicsRectItem *rect);
     void commitTextEdit();
     QRectF shotRect() const;
+    QRectF editRect() const;
     bool isOnShot(const QPointF &scenePos) const;
     QPointF clampToShot(const QPointF &scenePos) const;
     void applyWindowScreenLayout();

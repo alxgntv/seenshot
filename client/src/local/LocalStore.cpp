@@ -325,6 +325,45 @@ void LocalStore::setBlurAutoApiKeys(bool on)
     qInfo() << "LocalStore: blurAutoApiKeys set=" << on;
 }
 
+// ─── Ariadne's Thread [AT-0411] ─────────────────────
+// What: Persist last Text Size and Outline for new text blocks
+// Why:  Each new text reset to 18 / no outline
+// Date: 2026-09-04
+// Related: [AT-0334] app→AnnotateWindow.cpp:onTextSizeChanged, [AT-0021] LocalStore.h
+// ─────────────────────────────────────────────────────
+int LocalStore::textSize()
+{
+    QSettings settings;
+    const int size = qBound(10, settings.value(QStringLiteral("textSize"), 18).toInt(), 48);
+    qInfo() << "LocalStore: textSize=" << size;
+    return size;
+}
+
+void LocalStore::setTextSize(int size)
+{
+    const int next = qBound(10, size, 48);
+    QSettings settings;
+    settings.setValue(QStringLiteral("textSize"), next);
+    settings.sync();
+    qInfo() << "LocalStore: textSize set=" << next;
+}
+
+bool LocalStore::textOutline()
+{
+    QSettings settings;
+    const bool on = settings.value(QStringLiteral("textOutline"), false).toBool();
+    qInfo() << "LocalStore: textOutline=" << on;
+    return on;
+}
+
+void LocalStore::setTextOutline(bool on)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("textOutline"), on);
+    settings.sync();
+    qInfo() << "LocalStore: textOutline set=" << on;
+}
+
 // ─── Ariadne's Thread [AT-0091] ─────────────────────
 // What: Persist open annotate session for Sparkle relaunch
 // Why:  PRD-05 — install must not wipe the current shot and objects
