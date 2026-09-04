@@ -1,15 +1,30 @@
 cmake_minimum_required(VERSION 3.16)
-# ─── Ariadne's Thread [AT-0383] ─────────────────────
-# What: Bundle version 0.1.9
-# Why:  Notarized Sparkle release with Codex left of Cursor and matching copy hints
-# Date: 2026-08-29
-# Related: [AT-0383] packaging/macos/Info.plist, [AT-0383] client/src/main.cpp
+# ─── Ariadne's Thread [AT-0399] ─────────────────────
+# What: Bundle version 1.2.0
+# Why:  Ship auto-blur, Background frame edits, and Intel Mac x86_64 builds
+# Date: 2026-09-04
+# Related: [AT-0399] packaging/macos/Info.plist, [AT-0399] client/src/main.cpp
 # ─────────────────────────────────────────────────────
-project(SeenShot VERSION 0.1.9 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 1.2.0 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OSX_ARCHITECTURES arm64)
+# ─── Ariadne's Thread [AT-0389] ─────────────────────
+# What: SEENSHOT_MAC_ARCH selects arm64 or x86_64 at configure time
+# Why:  Intel MacBooks need an x86_64 build alongside Apple Silicon arm64
+# Date: 2026-09-03
+# Related: [AT-0389] packaging/macos/package_release.sh, [AT-0120] packaging/macos/package_sparkle.sh
+# ─────────────────────────────────────────────────────
+set(SEENSHOT_MAC_ARCH "arm64" CACHE STRING "Target macOS CPU: arm64 or x86_64")
+if(NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "${SEENSHOT_MAC_ARCH}")
+endif()
+if(SEENSHOT_MAC_ARCH STREQUAL "x86_64")
+    set(SEENSHOT_QT_HOMEBREW_RPATH "/usr/local/opt/qtbase/lib")
+else()
+    set(SEENSHOT_QT_HOMEBREW_RPATH "/opt/homebrew/opt/qtbase/lib")
+endif()
+message(STATUS "SeenShot macOS arch=${CMAKE_OSX_ARCHITECTURES} qt_rpath=${SEENSHOT_QT_HOMEBREW_RPATH}")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -141,7 +156,7 @@ target_link_libraries(SeenShot PRIVATE
 )
 
 set_target_properties(SeenShot PROPERTIES
-    BUILD_RPATH "@executable_path/../Frameworks;/opt/homebrew/opt/qtbase/lib"
+    BUILD_RPATH "@executable_path/../Frameworks;${SEENSHOT_QT_HOMEBREW_RPATH}"
     INSTALL_RPATH "@executable_path/../Frameworks"
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist
     MACOSX_BUNDLE_BUNDLE_NAME "SeenShot"

@@ -52,8 +52,12 @@ rm -rf "${APP}/Contents/Frameworks/Sparkle.framework"
 mkdir -p "${APP}/Contents/Frameworks"
 cp -R "${ROOT}/third_party/Sparkle/Sparkle.framework" "${APP}/Contents/Frameworks/"
 if otool -l "${APP}/Contents/MacOS/SeenShot" | grep -q '/opt/homebrew/opt/qtbase/lib'; then
-  log "delete homebrew rpath"
+  log "delete homebrew arm64 rpath"
   /usr/bin/install_name_tool -delete_rpath /opt/homebrew/opt/qtbase/lib "${APP}/Contents/MacOS/SeenShot" || true
+fi
+if otool -l "${APP}/Contents/MacOS/SeenShot" | grep -q '/usr/local/opt/qtbase/lib'; then
+  log "delete homebrew x86_64 rpath"
+  /usr/bin/install_name_tool -delete_rpath /usr/local/opt/qtbase/lib "${APP}/Contents/MacOS/SeenShot" || true
 fi
 
 sign_nested() {

@@ -9,13 +9,19 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BUILD="${ROOT}/build"
+SEENSHOT_ARCH="${SEENSHOT_ARCH:-arm64}"
+BUILD="${ROOT}/build-${SEENSHOT_ARCH}"
 APP="${BUILD}/SeenShot.app"
 ENTITLEMENTS="${ROOT}/packaging/macos/SeenShot.entitlements"
 INFO_PLIST="${ROOT}/packaging/macos/Info.plist"
 DOCS_APPCAST="${ROOT}/docs/appcast.xml"
 PACK_APPCAST="${ROOT}/packaging/macos/appcast.xml"
 QT_PREFIX="${QT_PREFIX:-$(brew --prefix qtbase)}"
+if [[ "${SEENSHOT_ARCH}" == "x86_64" && "${QT_PREFIX}" == "$(brew --prefix qtbase 2>/dev/null || true)" ]]; then
+  if [[ -d /usr/local/opt/qtbase ]]; then
+    QT_PREFIX="/usr/local/opt/qtbase"
+  fi
+fi
 MACDEPLOYQT="${MACDEPLOYQT:-$(brew --prefix qtbase)/bin/macdeployqt}"
 if [[ ! -x "${MACDEPLOYQT}" ]]; then
   MACDEPLOYQT="$(brew --prefix qttools)/bin/macdeployqt"
@@ -31,6 +37,7 @@ ALLOW_DEVELOPMENT_SIGN="${ALLOW_DEVELOPMENT_SIGN:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_NOTARY="${SKIP_NOTARY:-0}"
 SKIP_APPCAST="${SKIP_APPCAST:-0}"
+SEENSHOT_ARCH="${SEENSHOT_ARCH:-arm64}"
 
 log() {
   echo "package_sparkle: $*"
@@ -47,7 +54,7 @@ plist_version() {
 
 VERSION="${VERSION:-$(plist_version)}"
 [[ -n "${VERSION}" ]] || fail "empty version"
-log "version=${VERSION} root=${ROOT} repo=${GITHUB_REPOSITORY}"
+log "version=${VERSION} arch=${SEENSHOT_ARCH} root=${ROOT} repo=${GITHUB_REPOSITORY}"
 
 if [[ -z "${SPARKLE_BIN}" ]]; then
   if [[ -x /tmp/sparkle281/bin/sign_update ]]; then
@@ -72,12 +79,13 @@ fi
 log "codesign identity=${IDENTITY}"
 
 if [[ "${SKIP_BUILD}" != "1" ]]; then
-  log "cmake configure"
+  log "cmake configure arch=${SEENSHOT_ARCH} qt=${QT_PREFIX}"
   cmake -S "${ROOT}" -B "${BUILD}" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_PREFIX_PATH="${QT_PREFIX}" \
     -DCMAKE_OSX_SYSROOT="${SDKROOT}" \
     -DCMAKE_CXX_COMPILER="${CXX}" \
-    -DCMAKE_OBJCXX_COMPILER="${CXX}"
+    -DCMAKE_OBJCXX_COMPILER="${CXX}" \
+    -DSEENSHOT_MAC_ARCH="${SEENSHOT_ARCH}"
   log "cmake build"
   cmake --build "${BUILD}" --config Release -j"$(sysctl -n hw.ncpu)"
 fi
@@ -100,8 +108,12 @@ rm -rf "${APP}/Contents/Frameworks/Sparkle.framework"
 mkdir -p "${APP}/Contents/Frameworks"
 cp -R "${ROOT}/third_party/Sparkle/Sparkle.framework" "${APP}/Contents/Frameworks/"
 if otool -l "${APP}/Contents/MacOS/SeenShot" | grep -q '/opt/homebrew/opt/qtbase/lib'; then
-  log "delete homebrew rpath"
+  log "delete homebrew arm64 rpath"
   /usr/bin/install_name_tool -delete_rpath /opt/homebrew/opt/qtbase/lib "${APP}/Contents/MacOS/SeenShot" || true
+fi
+if otool -l "${APP}/Contents/MacOS/SeenShot" | grep -q '/usr/local/opt/qtbase/lib'; then
+  log "delete homebrew x86_64 rpath"
+  /usr/bin/install_name_tool -delete_rpath /usr/local/opt/qtbase/lib "${APP}/Contents/MacOS/SeenShot" || true
 fi
 
 sign_nested() {
@@ -159,7 +171,7 @@ log "codesign verify ok"
 # Date: 2026-08-26
 # Related: [AT-0027] packaging/macos/package_dmg.sh, docs/PRD-05-auto-update.md
 # ─────────────────────────────────────────────────────
-DMG_NAME="SeenShot-${VERSION}-arm64.dmg"
+DMG_NAME="SeenShot-${VERSION}-${SEENSHOT_ARCH}.dmg"
 DMG_PATH="${BUILD}/${DMG_NAME}"
 STAGE="${BUILD}/dmg-stage"
 rm -rf "${STAGE}" "${DMG_PATH}"

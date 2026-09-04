@@ -28,8 +28,9 @@ fail() {
 
 VERSION="${VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${INFO_PLIST}")}"
 [[ -n "${VERSION}" ]] || fail "empty version"
+SEENSHOT_ARCH="${SEENSHOT_ARCH:-arm64}"
 
-PKG_NAME="SeenShot-${VERSION}-arm64.pkg"
+PKG_NAME="SeenShot-${VERSION}-${SEENSHOT_ARCH}.pkg"
 PKG_PATH="${BUILD}/${PKG_NAME}"
 PAYLOAD="$(mktemp -d)"
 cleanup() {

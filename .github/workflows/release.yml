@@ -89,23 +89,27 @@ jobs:
           NOTARY_KEY: ${{ secrets.APPLE_API_KEY }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          QT_PREFIX: /opt/homebrew/opt/qtbase
+          QT_PREFIX_ARM64: /opt/homebrew/opt/qtbase
+          QT_PREFIX_X86_64: /usr/local/opt/qtbase
         run: |
           export CODESIGN_IDENTITY
           export SPARKLE_BIN
           export VERSION
           export GITHUB_REPOSITORY
           if [[ -z "${SPARKLE_ED_PRIVATE_KEY}" ]]; then
-            echo "package_sparkle: ERROR secret SPARKLE_ED_PRIVATE_KEY is empty" >&2
+            echo "package_release: ERROR secret SPARKLE_ED_PRIVATE_KEY is empty" >&2
             exit 1
           fi
           if [[ -z "${NOTARY_KEY}" || -z "${NOTARY_KEY_ID}" || -z "${NOTARY_ISSUER}" ]]; then
-            echo "package_sparkle: ERROR notary secrets APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER missing" >&2
+            echo "package_release: ERROR notary secrets APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER missing" >&2
             exit 1
           fi
-          chmod +x packaging/macos/package_sparkle.sh
-          packaging/macos/package_sparkle.sh
-          echo "DMG_PATH=${GITHUB_WORKSPACE}/build/SeenShot-${VERSION}-arm64.dmg" >> "$GITHUB_ENV"
+          chmod +x packaging/macos/package_release.sh packaging/macos/package_sparkle.sh
+          packaging/macos/package_release.sh | tee /tmp/package_release.log
+          DMG_ARM64="$(awk -F= '/^DMG_ARM64=/{print $2}' /tmp/package_release.log)"
+          DMG_X86_64="$(awk -F= '/^DMG_X86_64=/{print $2}' /tmp/package_release.log)"
+          echo "DMG_ARM64=${DMG_ARM64}" >> "$GITHUB_ENV"
+          echo "DMG_X86_64=${DMG_X86_64}" >> "$GITHUB_ENV"
 
       - name: GitHub Release
         env:
@@ -137,7 +141,8 @@ jobs:
           echo "package_sparkle: notesChars=$(wc -c < "${NOTES_FILE}" | tr -d ' ')"
           cat "${NOTES_FILE}"
           gh release create "${GITHUB_REF_NAME}" \
-            "${DMG_PATH}" \
+            "${DMG_ARM64}" \
+            "${DMG_X86_64}" \
             --title "SeenShot ${VERSION}" \
             --notes-file "${NOTES_FILE}"
           rm -f "${NOTES_FILE}"

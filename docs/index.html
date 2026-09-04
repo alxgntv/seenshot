@@ -76,6 +76,18 @@
       box-shadow: 5px 5px 0 #111;
     }
     .download:hover { transform: translate(-1px, -1px); }
+    .download-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .download.secondary {
+      background: #fff;
+      font-size: 14px;
+      padding: 10px 16px;
+      box-shadow: 3px 3px 0 #111;
+    }
     .meta {
       margin: 14px 0 0;
       font-size: 13px;
@@ -238,7 +250,16 @@
         Related: [AT-0143] docs/index.html, [AT-0133] docs/index.html
       ─────────────────────────────────────────────────────── -->
       <p class="lede">Fast, Free, Secure. Lightweight screenshot app for Mac with superfunctional annotation.</p>
-      <a id="latest-download" class="download" href="https://github.com/alxgntv/seenshot/releases">Download</a>
+      <!-- ─── Ariadne's Thread [AT-0389] ─────────────────────
+        What: Hero download picks arm64 or x86_64 DMG; secondary link for the other arch
+        Why:  Intel MacBooks need the x86_64 build; Apple Silicon keeps arm64
+        Date: 2026-09-03
+        Related: [AT-0389] packaging/macos/package_release.sh, [AT-0133] docs/index.html
+      ─────────────────────────────────────────────────────── -->
+      <div class="download-row">
+        <a id="latest-download" class="download" href="https://github.com/alxgntv/seenshot/releases">Download</a>
+        <a id="latest-download-alt" class="download secondary" href="https://github.com/alxgntv/seenshot/releases" hidden>Download</a>
+      </div>
       <p id="latest-meta" class="meta">Loading releases…</p>
     </section>
     <!-- ─── Ariadne's Thread [AT-0145] ─────────────────────
@@ -380,16 +401,93 @@
       });
     });
 
-    function downloadAsset(release) {
+    function detectMacArchSync() {
+      if (typeof navigator === "undefined" || navigator.platform.indexOf("Mac") === -1) {
+        console.log("SeenShot site: detectMacArchSync default=arm64 non-mac");
+        return "arm64";
+      }
+      try {
+        const canvas = document.createElement("canvas");
+        const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+        const debugInfo = gl && gl.getExtension("WEBGL_debug_renderer_info");
+        if (debugInfo) {
+          const renderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_INFO) || "");
+          console.log("SeenShot site: detectMacArchSync renderer=" + renderer);
+          if (renderer.indexOf("Apple M") !== -1) {
+            return "arm64";
+          }
+          if (renderer.indexOf("Intel") !== -1 || renderer.indexOf("AMD") !== -1) {
+            return "x86_64";
+          }
+        }
+      } catch (err) {
+        console.warn("SeenShot site: detectMacArchSync failed", err);
+      }
+      console.log("SeenShot site: detectMacArchSync fallback=arm64");
+      return "arm64";
+    }
+
+    // ─── Ariadne's Thread [AT-0390] ─────────────────────
+    // What: Prefer navigator.userAgentData architecture, then WebGL GPU renderer
+    // Why:  Chrome exposes arm/x86 reliably; Safari needs WebGL on Mac
+    // Date: 2026-09-03
+    // Related: [AT-0389] docs/index.html:downloadAsset, [AT-0389] packaging/macos/package_release.sh
+    // ─────────────────────────────────────────────────────
+    function detectMacArch() {
+      if (typeof navigator === "undefined" || navigator.platform.indexOf("Mac") === -1) {
+        console.log("SeenShot site: detectMacArch default=arm64 non-mac");
+        return Promise.resolve("arm64");
+      }
+      if (navigator.userAgentData && typeof navigator.userAgentData.getHighEntropyValues === "function") {
+        return navigator.userAgentData.getHighEntropyValues(["architecture"]).then(function (hints) {
+          const arch = hints && hints.architecture;
+          console.log("SeenShot site: detectMacArch userAgentData.architecture=" + arch);
+          if (arch === "arm") {
+            return "arm64";
+          }
+          if (arch === "x86") {
+            return "x86_64";
+          }
+          return detectMacArchSync();
+        }).catch(function (err) {
+          console.warn("SeenShot site: detectMacArch userAgentData failed", err);
+          return detectMacArchSync();
+        });
+      }
+      return Promise.resolve(detectMacArchSync());
+    }
+
+    function downloadAsset(release, preferredArch) {
       const assets = Array.isArray(release.assets) ? release.assets : [];
+      const arch = preferredArch || detectMacArch();
+      const archDmg = assets.find(function (asset) {
+        return typeof asset.name === "string" &&
+          asset.name.indexOf(".dmg") !== -1 &&
+          asset.name.indexOf(arch) !== -1;
+      });
+      if (archDmg) {
+        console.log("SeenShot site: downloadAsset arch=" + arch + " name=" + archDmg.name);
+        return archDmg;
+      }
       const dmg = assets.find(function (asset) {
         return typeof asset.name === "string" && asset.name.indexOf(".dmg") !== -1;
       });
       if (dmg) {
+        console.log("SeenShot site: downloadAsset fallback dmg=" + dmg.name);
         return dmg;
       }
       return assets.find(function (asset) {
         return typeof asset.name === "string" && asset.name.indexOf(".zip") !== -1;
+      }) || null;
+    }
+
+    function alternateDownloadAsset(release, preferredArch) {
+      const assets = Array.isArray(release.assets) ? release.assets : [];
+      const otherArch = preferredArch === "x86_64" ? "arm64" : "x86_64";
+      return assets.find(function (asset) {
+        return typeof asset.name === "string" &&
+          asset.name.indexOf(".dmg") !== -1 &&
+          asset.name.indexOf(otherArch) !== -1;
       }) || null;
     }
 
@@ -410,8 +508,8 @@
     // Date: 2026-08-26
     // Related: [AT-0133] docs/index.html, https://docs.github.com/en/rest/releases/releases
     // ─────────────────────────────────────────────────────
-    function releaseCard(release) {
-      const asset = downloadAsset(release);
+    function releaseCard(release, preferredArch) {
+      const asset = downloadAsset(release, preferredArch);
       const item = document.createElement("article");
       item.className = "release";
       const tag = release.tag_name || release.name || "release";
@@ -437,14 +535,16 @@
       return item;
     }
 
-    function render(releases) {
+    function render(releases, preferredArch) {
       const published = releases.filter(function (release) {
         return !release.draft;
       });
       console.log("SeenShot site: published releases=" + published.length);
       const list = document.getElementById("releases");
       const latestLink = document.getElementById("latest-download");
+      const latestAltLink = document.getElementById("latest-download-alt");
       const latestMeta = document.getElementById("latest-meta");
+      preferredArch = preferredArch || "arm64";
       if (published.length === 0) {
         list.innerHTML = '<p class="empty">No published releases yet. See <a href="' + FALLBACK + '">GitHub Releases</a>.</p>';
         latestMeta.textContent = "No published release yet.";
@@ -452,7 +552,8 @@
       }
       const latest = published[0];
       const previous = published.slice(1);
-      const latestAsset = downloadAsset(latest);
+      const latestAsset = downloadAsset(latest, preferredArch);
+      const alternateAsset = alternateDownloadAsset(latest, preferredArch);
       const version = latest.tag_name || latest.name || "latest";
       // ─── Ariadne's Thread [AT-0142] ─────────────────────
       // What: Hero meta is "stable version: {tag}"
@@ -468,15 +569,25 @@
       );
       if (latestAsset && latestAsset.browser_download_url) {
         latestLink.href = latestAsset.browser_download_url;
-        latestLink.textContent = "Download " + version;
-        console.log("SeenShot site: latest asset=" + latestAsset.browser_download_url);
+        const archLabel = preferredArch === "x86_64" ? "Intel Mac" : "Apple Silicon";
+        latestLink.textContent = "Download " + version + " (" + archLabel + ")";
+        console.log("SeenShot site: latest asset=" + latestAsset.browser_download_url + " arch=" + preferredArch);
       } else {
         latestLink.href = latest.html_url || FALLBACK;
         latestLink.textContent = "Open " + version;
         console.warn("SeenShot site: latest release has no dmg asset tag=" + version);
       }
+      if (alternateAsset && alternateAsset.browser_download_url) {
+        const altArch = preferredArch === "x86_64" ? "Apple Silicon" : "Intel Mac";
+        latestAltLink.hidden = false;
+        latestAltLink.href = alternateAsset.browser_download_url;
+        latestAltLink.textContent = "Download " + version + " (" + altArch + ")";
+        console.log("SeenShot site: alternate asset=" + alternateAsset.browser_download_url);
+      } else {
+        latestAltLink.hidden = true;
+      }
       list.innerHTML = "";
-      list.appendChild(releaseCard(latest));
+      list.appendChild(releaseCard(latest, preferredArch));
       console.log(
         "SeenShot site: current release=" + version +
           " previousFolded=" + previous.length +
@@ -492,7 +603,7 @@
       summary.textContent = "Previous releases";
       fold.appendChild(summary);
       previous.forEach(function (release) {
-        fold.appendChild(releaseCard(release));
+        fold.appendChild(releaseCard(release, preferredArch));
       });
       fold.addEventListener("toggle", function () {
         console.log(
@@ -525,7 +636,10 @@
       if (!Array.isArray(data)) {
         throw new Error("GitHub Releases payload is not an array");
       }
-      render(data);
+      return detectMacArch().then(function (preferredArch) {
+        console.log("SeenShot site: preferredArch=" + preferredArch);
+        render(data, preferredArch);
+      });
     }).catch(function (error) {
       showError(error && error.message ? error.message : "GitHub Releases request failed.");
     });
