@@ -89,6 +89,8 @@ jobs:
           NOTARY_KEY: ${{ secrets.APPLE_API_KEY }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           QT_PREFIX_ARM64: /opt/homebrew/opt/qtbase
           QT_PREFIX_X86_64: /usr/local/opt/qtbase
         run: |
@@ -104,7 +106,11 @@ jobs:
             echo "package_release: ERROR notary secrets APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER missing" >&2
             exit 1
           fi
-          chmod +x packaging/macos/package_release.sh packaging/macos/package_sparkle.sh
+          if [[ -z "${CLOUDFLARE_API_TOKEN}" ]]; then
+            echo "package_release: skip r2 CLOUDFLARE_API_TOKEN empty"
+            export SKIP_R2=1
+          fi
+          chmod +x packaging/macos/package_release.sh packaging/macos/package_sparkle.sh packaging/macos/upload_r2_release.sh
           packaging/macos/package_release.sh | tee /tmp/package_release.log
           DMG_ARM64="$(awk -F= '/^DMG_ARM64=/{print $2}' /tmp/package_release.log)"
           DMG_X86_64="$(awk -F= '/^DMG_X86_64=/{print $2}' /tmp/package_release.log)"

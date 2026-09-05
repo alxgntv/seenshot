@@ -125,6 +125,22 @@ fi
 generate_appcast_for "arm64" "${DMG_ARM64}" "${DOCS_APPCAST_ARM64}" "${PACK_APPCAST_ARM64}"
 generate_appcast_for "x86_64" "${DMG_X86}" "${DOCS_APPCAST_X86}" "${PACK_APPCAST_X86}"
 
+# ─── Ariadne's Thread [AT-0521] ─────────────────────
+# What: Upload notarized arm64 and x86_64 DMGs to R2 releases/ after staple
+# Why:  seenshot.app/download must read project R2; GitHub remains fallback
+# Date: 2026-09-05
+# Related: [AT-0521] packaging/macos/upload_r2_release.sh, [AT-0522] seenshot-web→lib/site.ts:serveLatestMacDmg
+# ─────────────────────────────────────────────────────
+if [[ "${SKIP_NOTARY:-0}" == "1" ]]; then
+  log "skip r2 upload SKIP_NOTARY=1"
+elif [[ "${SKIP_R2:-0}" == "1" ]]; then
+  log "skip r2 upload SKIP_R2=1"
+else
+  log "upload r2 releases version=${VERSION}"
+  chmod +x "${ROOT}/packaging/macos/upload_r2_release.sh"
+  VERSION="${VERSION}" "${ROOT}/packaging/macos/upload_r2_release.sh" "${DMG_ARM64}" "${DMG_X86}"
+fi
+
 if [[ "${SPARKLE_ED_KEY_FILE}" == /tmp/* ]] || [[ "${SPARKLE_ED_KEY_FILE}" == /var/folders/* ]]; then
   rm -f "${SPARKLE_ED_KEY_FILE}"
 fi

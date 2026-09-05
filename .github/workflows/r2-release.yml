@@ -1,0 +1,36 @@
+# ─── Ariadne's Thread [AT-0523] ─────────────────────
+# What: On GitHub Release published, copy latest DMGs into R2 releases/
+# Why:  Landing /download reads R2 latest-*; a gh release create must update the button
+# Date: 2026-09-05
+# Related: [AT-0521] packaging/macos/upload_r2_release.sh, [AT-0121] .github/workflows/release.yml, https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#release
+# ─────────────────────────────────────────────────────
+name: r2-release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  upload:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Put latest GitHub DMGs into R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [[ -z "${CLOUDFLARE_API_TOKEN}" ]]; then
+            echo "upload_r2_release: skip CLOUDFLARE_API_TOKEN empty"
+            exit 0
+          fi
+          chmod +x packaging/macos/upload_r2_release.sh
+          packaging/macos/upload_r2_release.sh --from-github
