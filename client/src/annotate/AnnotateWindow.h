@@ -87,6 +87,7 @@ public:
     bool viewRelease(QMouseEvent *event, const QPointF &scenePos);
     bool viewKeyPress(QKeyEvent *event);
     void paintShotBorder(QPainter *painter) const;
+    void paintWatermark(QPainter *painter) const;
     void paintSelectHandles(QPainter *painter) const;
 
 public slots:
@@ -109,6 +110,7 @@ private slots:
     void saveLocal();
     void share();
     void onWebsiteSignInSettled(const QString &errorCode);
+    void refreshWatermarkPlan();
     void setToolSelect();
     void setToolHighlight();
     void setToolArrow();
@@ -231,6 +233,7 @@ private:
     QPointF clampToShot(const QPointF &scenePos) const;
     void applyWindowScreenLayout();
     void layoutToolsBar();
+    QRect editorCanvasRect() const;
     void fitShotToWindow();
     void applyCanvasChrome();
     void applyAnnotateChromeTheme();
@@ -252,9 +255,18 @@ private:
     QRectF canvasRect() const;
     QImage shotImage() const;
     bool hasBackground() const;
+    bool hasProPlan() const;
+    void loadCachedPlan();
+    void paintWatermark(QPainter *painter, const QRectF &target) const;
     qreal maxTextWidthOnShot(const AnnotateTextItem *item) const;
     void showError(const QString &code);
     void showQuotaEvicted();
+    void openRemoveWatermark();
+    void openSignUp();
+    void openProCheckout();
+    void updateWatermarkBar();
+    void layoutWatermarkBar();
+    int editorChromeBottomInset() const;
     bool ensureOnlineSignedIn(QString *errorCode);
     void setShareBusy(bool busy);
     void setShareProgress(qint64 sent, qint64 total);
@@ -409,8 +421,14 @@ private:
     QLabel *m_updateStatus = nullptr;
     QPushButton *m_shareBtn = nullptr;
     QPushButton *m_saveBtn = nullptr;
+    QFrame *m_watermarkBar = nullptr;
+    QPushButton *m_removeWatermarkBtn = nullptr;
+    QPushButton *m_signUpBtn = nullptr;
     QProgressBar *m_shareBusy = nullptr;
     QProgressBar *m_shareProgress = nullptr;
     bool m_shareUploading = false;
     bool m_shareAfterSignIn = false;
+    bool m_checkoutAfterSignIn = false;
+    QString m_plan;
+    bool m_watermarkPlanBusy = false;
 };

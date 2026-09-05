@@ -65,6 +65,47 @@ SCDisplay *displayForRect(NSArray<SCDisplay *> *displays, const QRect &screenRec
     return displays.firstObject;
 }
 
+// ─── Ariadne's Thread [AT-0549] ─────────────────────
+// What: Resolve Retina scale from SCContentFilter.pointPixelScale
+// Why:  SCDisplay.width is points; width/frame was 1.0 and ScreenCaptureKit wrote 1x pixels
+// Date: 2026-09-05
+// Related: [AT-0069] ScreenCaptureBackend.mm:captureWithManager, SCContentFilter.pointPixelScale
+// ─────────────────────────────────────────────────────
+CGFloat pixelScaleForDisplay(SCDisplay *display, SCContentFilter *filter)
+{
+    const CGFloat filterScale = filter ? static_cast<CGFloat>(filter.pointPixelScale) : 0.0;
+    CGFloat screenScale = 0.0;
+    const CGDirectDisplayID displayID = display ? display.displayID : kCGNullDirectDisplay;
+    for (NSScreen *screen in NSScreen.screens) {
+        NSNumber *number = screen.deviceDescription[@"NSScreenNumber"];
+        if (number && number.unsignedIntValue == displayID) {
+            screenScale = screen.backingScaleFactor;
+            qInfo() << "ScreenCaptureBackend: NSScreen match displayID=" << static_cast<int>(displayID)
+                    << " backingScaleFactor=" << screenScale << " frame=" << screen.frame.size.width << "x"
+                    << screen.frame.size.height;
+            break;
+        }
+    }
+    const CGFloat displayRatio = (display && display.frame.size.width > 0)
+        ? (static_cast<CGFloat>(display.width) / display.frame.size.width)
+        : 0.0;
+    qInfo() << "ScreenCaptureBackend: pixelScale filter.pointPixelScale=" << filterScale
+            << " backingScaleFactor=" << screenScale << " display.width/frame=" << displayRatio
+            << " display.width=" << (display ? static_cast<int>(display.width) : -1)
+            << " display.height=" << (display ? static_cast<int>(display.height) : -1)
+            << " frame=" << (display ? display.frame.size.width : 0) << "x"
+            << (display ? display.frame.size.height : 0) << " displayID=" << static_cast<int>(displayID);
+    if (filterScale > 0.0) {
+        return filterScale;
+    }
+    if (screenScale > 0.0) {
+        qWarning() << "ScreenCaptureBackend: pointPixelScale missing, using backingScaleFactor=" << screenScale;
+        return screenScale;
+    }
+    qWarning() << "ScreenCaptureBackend: no pixel scale, using 1";
+    return 1.0;
+}
+
 NSArray<SCRunningApplication *> *seenShotApps(SCShareableContent *content)
 {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
@@ -88,6 +129,12 @@ NSArray<SCRunningApplication *> *seenShotApps(SCShareableContent *content)
 // Date: 2026-08-25
 // Related: [AT-0037] ScreenCaptureBackend.mm:captureRegion, [AT-0009] ScreenCaptureBackend.h
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0549] ─────────────────────
+// What: Set SCStreamConfiguration width/height to points * pointPixelScale
+// Why:  SCDisplay.width is points so width/frame wrote a 1x buffer on Retina
+// Date: 2026-09-05
+// Related: [AT-0549] ScreenCaptureBackend.mm:pixelScaleForDisplay, [AT-0069] ScreenCaptureBackend.mm:captureWithManager
+// ─────────────────────────────────────────────────────
 void captureWithManager(SCShareableContent *content, SCDisplay *display, const QRect &screenRect,
                         void (^done)(QImage image, QString code))
 {
@@ -97,8 +144,7 @@ void captureWithManager(SCShareableContent *content, SCDisplay *display, const Q
                                                           exceptingWindows:@[]];
         SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
         const CGRect displayFrame = display.frame;
-        const CGFloat scale =
-            display.frame.size.width > 0 ? (CGFloat)display.width / display.frame.size.width : 1.0;
+        const CGFloat scale = pixelScaleForDisplay(display, filter);
         CGRect source = CGRectMake(screenRect.x() - displayFrame.origin.x,
                                    screenRect.y() - displayFrame.origin.y, screenRect.width(),
                                    screenRect.height());
@@ -119,7 +165,9 @@ void captureWithManager(SCShareableContent *content, SCDisplay *display, const Q
         qInfo() << "ScreenCaptureBackend: SCScreenshotManager source=" << source.origin.x << source.origin.y
                 << source.size.width << source.size.height << " scale=" << scale
                 << " out=" << (int)outW << "x" << (int)outH
-                << " displayPx=" << (int)display.width << "x" << (int)display.height
+                << " displayPoints=" << (int)display.width << "x" << (int)display.height
+                << " filter.contentRect=" << filter.contentRect.size.width << "x"
+                << filter.contentRect.size.height << " filter.pointPixelScale=" << filter.pointPixelScale
                 << " mainThread=" << [NSThread isMainThread];
 
         [SCScreenshotManager captureImageWithFilter:filter
@@ -129,6 +177,8 @@ void captureWithManager(SCShareableContent *content, SCDisplay *display, const Q
                                               << " hasImage=" << (image != nil)
                                               << " cg=" << (image ? (int)CGImageGetWidth(image) : 0) << "x"
                                               << (image ? (int)CGImageGetHeight(image) : 0)
+                                              << " requested=" << (int)outW << "x" << (int)outH
+                                              << " scale=" << scale
                                               << " error=" << (error ? QString::fromNSString(error.localizedDescription) : QString())
                                               << " mainThread=" << [NSThread isMainThread];
                                       if (error) {

@@ -19,7 +19,6 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QSignalBlocker>
-#include <QBuffer>
 #include <QByteArray>
 #include <QBrush>
 #include <QClipboard>
@@ -44,6 +43,8 @@
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
+#include <QFontMetrics>
 #include <QIODevice>
 #include <QFrame>
 #include <QJsonArray>
@@ -88,6 +89,8 @@
 #include <QMetaObject>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QLayout>
+#include <QLayoutItem>
 #include <QTransform>
 #include <QUndoStack>
 #include <QVariant>
@@ -257,7 +260,26 @@ public:
         // Related: [AT-0156] AnnotateWindow.cpp:paintSelectHandles, Qt QGraphicsView::ViewportUpdateMode
         // ─────────────────────────────────────────────────────
         setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
-        qInfo() << "EditorView: viewport update mode=" << viewportUpdateMode();
+        setFrameShape(QFrame::NoFrame);
+        QPalette pal = palette();
+        pal.setColor(QPalette::Base, QColor(0, 0, 0));
+        pal.setColor(QPalette::Window, QColor(0, 0, 0));
+        setPalette(pal);
+        setBackgroundBrush(QColor(0, 0, 0));
+        viewport()->setAutoFillBackground(true);
+        viewport()->setPalette(pal);
+        qInfo() << "EditorView: viewport update mode=" << viewportUpdateMode()
+                << " frame=" << frameShape() << " base=" << pal.color(QPalette::Base).name();
+    }
+
+    QSize sizeHint() const override
+    {
+        return QSize(1, 1);
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return QSize(0, 0);
     }
 
     QMargins fitViewportMargins() const
@@ -307,6 +329,7 @@ protected:
     {
         QGraphicsView::drawForeground(painter, rect);
         m_host->paintShotBorder(painter);
+        m_host->paintWatermark(painter);
         m_host->paintSelectHandles(painter);
     }
 
@@ -406,8 +429,9 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
 {
     m_textSize = LocalStore::textSize();
     m_textOutline = LocalStore::textOutline();
+    loadCachedPlan();
     qInfo() << "AnnotateWindow: constructed fileId=" << m_fileId << "textSize=" << m_textSize
-            << "textOutline=" << m_textOutline;
+            << "textOutline=" << m_textOutline << "plan=" << m_plan << "pro=" << hasProPlan();
     setWindowTitle(QStringLiteral("SeenShot — Annotate"));
     // ─── Ariadne's Thread [AT-0202] ─────────────────────
     // What: Annotate window does not participate in last-window-closed quit
@@ -469,7 +493,9 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     // Related: [AT-0149] AnnotateWindow.cpp, [AT-0131] AnnotateWindow.cpp:m_bgButton
     // ─────────────────────────────────────────────────────
     toolbar->setIconSize(QSize(16, 16));
+    toolbar->setAutoFillBackground(false);
     toolbar->setAttribute(Qt::WA_StyledBackground, true);
+    toolbar->setAttribute(Qt::WA_TranslucentBackground, true);
     toolbar->setStyleSheet(QStringLiteral(
         "#AnnotateTools { background: #2c2c2e; border: 1px solid #6e6e73; border-radius: 14px; padding: 3px 6px; "
         "spacing: 2px; }"
@@ -1009,7 +1035,8 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     connect(m_shareBtn, &QPushButton::clicked, this, &AnnotateWindow::share);
     if (m_auth) {
         connect(m_auth, &AuthSession::websiteSignInSettled, this, &AnnotateWindow::onWebsiteSignInSettled);
-        qInfo() << "AnnotateWindow: connected websiteSignInSettled";
+        connect(m_auth, &AuthSession::sessionChanged, this, &AnnotateWindow::refreshWatermarkPlan);
+        qInfo() << "AnnotateWindow: connected websiteSignInSettled and sessionChanged for watermark";
     } else {
         qWarning() << "AnnotateWindow: no AuthSession, Share cannot start website sign-in";
     }
@@ -1017,6 +1044,34 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     toolbar->addWidget(m_shareProgress);
     toolbar->addWidget(m_shareBtn);
     qInfo() << "AnnotateWindow: slider labels on; Save/Share Link native QPushButton shareProgress=on";
+
+    // ─── Ariadne's Thread [AT-0422] ─────────────────────
+    // What: Bottom bar with Remove Watermark and Sign Up when plan is not Pro
+    // Why:  Free exports show the grid; users need a visible path to Pro and registration
+    // Date: 2026-09-04
+    // Related: [AT-0414] AnnotateWindow.cpp:paintWatermark, [AT-0193] AuthSession.cpp:startWebsiteSignIn
+    // ─────────────────────────────────────────────────────
+    m_watermarkBar = new QFrame(this);
+    m_watermarkBar->setObjectName(QStringLiteral("WatermarkBar"));
+    m_watermarkBar->setAttribute(Qt::WA_StyledBackground, true);
+    m_watermarkBar->setStyleSheet(QStringLiteral(
+        "#WatermarkBar { background: #2c2c2e; border: 1px solid #6e6e73; border-radius: 14px; }"));
+    auto *watermarkShadow = new QGraphicsDropShadowEffect(m_watermarkBar);
+    watermarkShadow->setBlurRadius(22);
+    watermarkShadow->setOffset(0, 4);
+    watermarkShadow->setColor(QColor(0, 0, 0, 150));
+    m_watermarkBar->setGraphicsEffect(watermarkShadow);
+    auto *watermarkLay = new QHBoxLayout(m_watermarkBar);
+    watermarkLay->setContentsMargins(10, 8, 10, 8);
+    watermarkLay->setSpacing(10);
+    m_removeWatermarkBtn = makeNativeToolbarButton(QStringLiteral("Remove Watermark"), true);
+    m_signUpBtn = makeNativeToolbarButton(QStringLiteral("Sign Up"), false);
+    watermarkLay->addWidget(m_removeWatermarkBtn);
+    watermarkLay->addWidget(m_signUpBtn);
+    connect(m_removeWatermarkBtn, &QPushButton::clicked, this, &AnnotateWindow::openRemoveWatermark);
+    connect(m_signUpBtn, &QPushButton::clicked, this, &AnnotateWindow::openSignUp);
+    m_watermarkBar->hide();
+    qInfo() << "AnnotateWindow: watermark bar created";
 
     // ─── Ariadne's Thread [AT-0396] ─────────────────────
     // What: Blur sidebar in a right-hand column next to the view
@@ -1095,7 +1150,9 @@ QImage AnnotateWindow::exportedImage() const
     QPainter painter(&out);
     painter.setRenderHint(QPainter::Antialiasing);
     m_scene->render(&painter, out.rect(), canvas);
-    qInfo() << "AnnotateWindow: exported" << out.size() << "canvas=" << canvas << "bg=" << hasBackground();
+    paintWatermark(&painter, QRectF(out.rect()));
+    qInfo() << "AnnotateWindow: exported" << out.size() << "canvas=" << canvas << "bg=" << hasBackground()
+            << "watermark=" << !hasProPlan() << "plan=" << m_plan;
     return out;
 }
 
@@ -1159,10 +1216,13 @@ void AnnotateWindow::showEvent(QShowEvent *event)
         applyWindowScreenLayout();
     }
     layoutToolsBar();
+    layoutWatermarkBar();
     fitShotToWindow();
     layoutPhotoOverlay();
     layoutUpdateCard();
     layoutPhotoChoice();
+    updateWatermarkBar();
+    QTimer::singleShot(0, this, &AnnotateWindow::refreshWatermarkPlan);
     if (!m_redactShowKickoff) {
         m_redactShowKickoff = true;
         QTimer::singleShot(0, this, [this]() {
@@ -1177,6 +1237,7 @@ void AnnotateWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     layoutToolsBar();
+    layoutWatermarkBar();
     fitShotToWindow();
     layoutPhotoOverlay();
     layoutUpdateCard();
@@ -1345,6 +1406,36 @@ bool AnnotateWindow::hasBackground() const
     return m_bgPreset > 0;
 }
 
+bool AnnotateWindow::hasProPlan() const
+{
+    return m_plan == QLatin1String("pro");
+}
+
+// ─── Ariadne's Thread [AT-0415] ─────────────────────
+// What: Load QSettings plan for this uid before the first paint
+// Why:  Pro must never see the grid while /v1/quota is in flight
+// Date: 2026-09-04
+// Related: [AT-0414] AnnotateWindow.cpp:paintWatermark, [AT-0415] LocalStore.cpp:setPlan
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::loadCachedPlan()
+{
+    if (!m_auth || !m_auth->hasSession()) {
+        m_plan.clear();
+        qInfo() << "AnnotateWindow: loadCachedPlan signed out";
+        return;
+    }
+    const QString uid = m_auth->uid();
+    const QString cachedUid = LocalStore::planUid();
+    if (uid.isEmpty() || cachedUid != uid) {
+        m_plan.clear();
+        qInfo() << "AnnotateWindow: loadCachedPlan miss uidChars=" << uid.size()
+                << "cachedUidChars=" << cachedUid.size();
+        return;
+    }
+    m_plan = LocalStore::plan();
+    qInfo() << "AnnotateWindow: loadCachedPlan hit plan=" << m_plan << "pro=" << hasProPlan();
+}
+
 // ─── Ariadne's Thread [AT-0410] ─────────────────────
 // What: Annotation hit/clamp bounds use canvas when a Background preset is on
 // Why:  shotRect stayed on the PNG so Text/Arrow could not be placed on the frame
@@ -1415,17 +1506,44 @@ void AnnotateWindow::layoutToolsBar()
     }
     m_toolsBar->adjustSize();
     const QSize hint = m_toolsBar->sizeHint();
+    const QRect canvas = editorCanvasRect();
     const int margin = 12;
-    const int maxW = qMax(1, width() - margin * 2);
+    const int maxW = qMax(1, canvas.width() - margin * 2);
     const int w = qMin(hint.width(), maxW);
     const int h = hint.height();
-    const int x = qMax(margin, (width() - w) / 2);
-    m_toolsBar->setGeometry(x, margin, w, h);
+    const int x = canvas.x() + qMax(margin, (canvas.width() - w) / 2);
+    const int y = canvas.y() + margin;
+    m_toolsBar->setGeometry(x, y, w, h);
     m_toolsBar->raise();
     m_toolsBar->show();
-    qInfo() << "AnnotateWindow: tools bar geo=" << m_toolsBar->geometry() << "hint=" << hint << "windowW=" << width()
-            << "overflow=" << (hint.width() > maxW);
+    qInfo() << "AnnotateWindow: tools bar geo=" << m_toolsBar->geometry() << "hint=" << hint
+            << "canvas=" << canvas << "windowW=" << width() << "overflow=" << (hint.width() > maxW);
     layoutCopyHint();
+}
+
+// ─── Ariadne's Thread [AT-0554] ─────────────────────
+// What: Floating chrome uses the QGraphicsView column, not the full window
+// Why:  Max-width toolbar used window width and covered the 240px Blur sidebar
+// Date: 2026-09-05
+// Related: [AT-0150] AnnotateWindow.cpp:layoutToolsBar, [AT-0396] AnnotateWindow.cpp:setBlurSidebarVisible
+// ─────────────────────────────────────────────────────
+QRect AnnotateWindow::editorCanvasRect() const
+{
+    if (!m_view) {
+        qWarning() << "AnnotateWindow: editorCanvasRect missing view window=" << rect();
+        return rect();
+    }
+    const QPoint topLeft = m_view->mapTo(this, QPoint(0, 0));
+    const QRect canvas(topLeft, m_view->size());
+    qInfo() << "AnnotateWindow: editorCanvasRect" << canvas << "window=" << size()
+            << "viewGeo=" << m_view->geometry()
+            << "sidebarVisible=" << (m_blurSidebar && m_blurSidebar->isVisible())
+            << "sidebarGeo=" << (m_blurSidebar ? m_blurSidebar->geometry() : QRect());
+    if (canvas.width() < 1 || canvas.height() < 1) {
+        qWarning() << "AnnotateWindow: editorCanvasRect empty, using window";
+        return rect();
+    }
+    return canvas;
 }
 
 // ─── Ariadne's Thread [AT-0413] ─────────────────────
@@ -1433,6 +1551,12 @@ void AnnotateWindow::layoutToolsBar()
 // Why:  80% of the full window still centered the frame under the floating toolbar
 // Date: 2026-09-04
 // Related: [AT-0050] AnnotateWindow.cpp:fitShotToWindow, [AT-0056] AnnotateWindow.cpp:applyCanvasChrome
+// ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0553] ─────────────────────
+// What: Fit Background chrome with centerOn offset; do not setViewportMargins
+// Why:  QAbstractScrollArea margins painted Window palette as a band under the toolbar
+// Date: 2026-09-05
+// Related: [AT-0413] AnnotateWindow.cpp:fitShotToWindow, Qt QAbstractScrollArea::setViewportMargins
 // ─────────────────────────────────────────────────────
 void AnnotateWindow::fitShotToWindow()
 {
@@ -1453,13 +1577,18 @@ void AnnotateWindow::fitShotToWindow()
         qInfo() << "AnnotateWindow: fit shot no toolbar inset bg=" << bg
                 << "barVisible=" << (m_toolsBar && m_toolsBar->isVisible());
     }
+    int bottomMargin = 0;
+    if (!hasProPlan() && m_watermarkBar && m_watermarkBar->isVisible()) {
+        const QPoint barTop(0, m_watermarkBar->geometry().top());
+        const QPoint inView = m_view->mapFrom(this, barTop);
+        bottomMargin = qMax(0, m_view->viewport()->height() - inView.y() + 12);
+        qInfo() << "AnnotateWindow: fit watermark bar inset bottomMargin=" << bottomMargin
+                << "barGeo=" << m_watermarkBar->geometry() << "inViewY=" << inView.y();
+    }
     auto *editorView = static_cast<EditorView *>(m_view);
-    const QMargins oldMargins = editorView->fitViewportMargins();
-    const QMargins nextMargins(0, topMargin, 0, 0);
-    if (oldMargins != nextMargins) {
-        editorView->setFitViewportMargins(nextMargins);
-        qInfo() << "AnnotateWindow: viewportMargins" << oldMargins << "->" << nextMargins
-                << "viewport=" << m_view->viewport()->size();
+    if (!editorView->fitViewportMargins().isNull()) {
+        editorView->setFitViewportMargins(QMargins());
+        qInfo() << "AnnotateWindow: cleared viewportMargins so Window palette is not a strip";
     }
     const QSize win = size();
     const QSize vp = m_view->viewport()->size();
@@ -1473,25 +1602,44 @@ void AnnotateWindow::fitShotToWindow()
         qWarning() << "AnnotateWindow: fitShot skipped empty canvas=" << canvas;
         return;
     }
-    const qreal targetW = (bg ? static_cast<qreal>(vp.width()) : static_cast<qreal>(win.width())) * 0.8;
-    const qreal targetH = (bg ? static_cast<qreal>(vp.height()) : static_cast<qreal>(win.height())) * 0.8;
+    const qreal availW = static_cast<qreal>(vp.width());
+    const qreal availH = qMax(1.0, static_cast<qreal>(vp.height() - topMargin - bottomMargin));
+    const qreal targetW = (bg ? availW : static_cast<qreal>(win.width())) * 0.8;
+    const qreal targetH = (bg ? availH : static_cast<qreal>(win.height())) * 0.8;
     const qreal sx = targetW / canvas.width();
     const qreal sy = targetH / canvas.height();
     qreal scale = qMin(sx, sy);
-    const qreal vsx = static_cast<qreal>(vp.width()) / canvas.width();
-    const qreal vsy = static_cast<qreal>(vp.height()) / canvas.height();
+    const qreal vsx = availW / canvas.width();
+    const qreal vsy = availH / canvas.height();
     const qreal viewMax = qMin(vsx, vsy);
     if (scale > viewMax) {
         qInfo() << "AnnotateWindow: canvas 80% exceeds view, clamp scale" << scale << "->" << viewMax;
         scale = viewMax;
     }
+    if (scale <= 0.0) {
+        qWarning() << "AnnotateWindow: fitShot skipped non-positive scale=" << scale << "avail=" << QSizeF(availW, availH);
+        return;
+    }
     QTransform t;
     t.scale(scale, scale);
     m_view->setTransform(t);
-    m_view->centerOn(canvas.center());
-    qInfo() << "AnnotateWindow: shot scale=" << scale << "window=" << win << "view=" << vp
-            << "canvas=" << canvas << "shot=" << m_source.size() << "bg=" << bg
-            << "topMargin=" << topMargin << "target=" << QSizeF(targetW, targetH);
+    if (bg) {
+        const qreal visualCenterY = static_cast<qreal>(topMargin) + availH / 2.0;
+        const qreal viewCenterY = static_cast<qreal>(vp.height()) / 2.0;
+        const qreal sceneY = canvas.center().y() - (visualCenterY - viewCenterY) / scale;
+        const QPointF focus(canvas.center().x(), sceneY);
+        m_view->centerOn(focus);
+        qInfo() << "AnnotateWindow: shot scale=" << scale << "window=" << win << "view=" << vp
+                << "canvas=" << canvas << "shot=" << m_source.size() << "bg=" << bg
+                << "topMargin=" << topMargin << "bottomMargin=" << bottomMargin
+                << "target=" << QSizeF(targetW, targetH) << "avail=" << QSizeF(availW, availH)
+                << "visualCenterY=" << visualCenterY << "focus=" << focus;
+    } else {
+        m_view->centerOn(canvas.center());
+        qInfo() << "AnnotateWindow: shot scale=" << scale << "window=" << win << "view=" << vp
+                << "canvas=" << canvas << "shot=" << m_source.size() << "bg=" << bg
+                << "topMargin=" << topMargin << "bottomMargin=" << bottomMargin << "target=" << QSizeF(targetW, targetH);
+    }
 }
 
 qreal AnnotateWindow::maxTextWidthOnShot(const AnnotateTextItem *item) const
@@ -1788,6 +1936,12 @@ bool AnnotateWindow::ensureOnlineSignedIn(QString *errorCode)
 // Date: 2026-08-28
 // Related: [AT-0076] AnnotateWindow.cpp:exportedImage, [AT-0368] MacIcons.mm:macResourceIcon
 // ─────────────────────────────────────────────────────
+// ─── Ariadne's Thread [AT-0551] ─────────────────────
+// What: Clipboard PNG bytes come from CloudPngEncoder::encode
+// Why:  QImage::save was a second encoder; Copy/Save/Share must be the same PNG
+// Date: 2026-09-05
+// Related: [AT-0550] CloudPngEncoder.mm:encode, [AT-0215] AnnotateWindow.cpp:saveLocal
+// ─────────────────────────────────────────────────────
 void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString &agentName)
 {
     commitTextEdit();
@@ -1797,16 +1951,11 @@ void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString
                    << "agent=" << agentName << "anchor=" << static_cast<void *>(anchor);
         return;
     }
-    QByteArray png;
-    QBuffer buffer(&png);
-    if (!buffer.open(QIODevice::WriteOnly)) {
-        qWarning() << "AnnotateWindow: copy screenshot buffer open failed size=" << image.size()
-                   << "agent=" << agentName;
-        return;
-    }
-    if (!image.save(&buffer, "PNG")) {
+    QString encodeCode;
+    const QByteArray png = CloudPngEncoder::encode(image, &encodeCode);
+    if (png.isEmpty()) {
         qWarning() << "AnnotateWindow: copy screenshot PNG encode failed size=" << image.size()
-                   << "agent=" << agentName;
+                   << "agent=" << agentName << "encodeCode=" << encodeCode;
         return;
     }
     auto *mime = new QMimeData;
@@ -1816,6 +1965,7 @@ void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString
     const QString hint = QStringLiteral("Screenshot copied. Paste it in %1").arg(agentName);
     qInfo() << "AnnotateWindow: copy screenshot pngBytes=" << png.size() << "size=" << image.size()
             << "format=" << image.format() << "agent=" << agentName << "hint=" << hint
+            << "encodeCode=" << encodeCode
             << "anchor=" << static_cast<void *>(anchor)
             << "anchorSize=" << (anchor ? anchor->size() : QSize())
             << "anchorVisible=" << (anchor && anchor->isVisible());
@@ -2088,9 +2238,12 @@ void AnnotateWindow::onWebsiteSignInSettled(const QString &errorCode)
 {
     const bool pendingShare = m_shareAfterSignIn;
     m_shareAfterSignIn = false;
+    const bool pendingCheckout = m_checkoutAfterSignIn;
+    m_checkoutAfterSignIn = false;
     const bool signedIn = m_auth && m_auth->hasSession();
     qInfo() << "AnnotateWindow: website sign-in settled code=" << errorCode
-            << " pendingShare=" << pendingShare << " hasSession=" << signedIn;
+            << " pendingShare=" << pendingShare << " pendingCheckout=" << pendingCheckout
+            << " hasSession=" << signedIn;
     if (!errorCode.isEmpty() && errorCode != QLatin1String("AUTH_OAUTH_DENIED")) {
         showError(errorCode);
         return;
@@ -2099,9 +2252,241 @@ void AnnotateWindow::onWebsiteSignInSettled(const QString &errorCode)
         qInfo() << "AnnotateWindow: website sign-in canceled, share not resumed";
         return;
     }
+    refreshWatermarkPlan();
+    if (pendingCheckout && signedIn) {
+        qInfo() << "AnnotateWindow: resume checkout after website sign-in plan=" << m_plan;
+        openProCheckout();
+        return;
+    }
     if (pendingShare && signedIn) {
-        qInfo() << "AnnotateWindow: resume share after website sign-in";
+        qInfo() << "AnnotateWindow: resume share after website sign-in plan=" << m_plan;
         share();
+    }
+}
+
+void AnnotateWindow::refreshWatermarkPlan()
+{
+    if (m_watermarkPlanBusy) {
+        qInfo() << "AnnotateWindow: watermark plan fetch already running plan=" << m_plan;
+        return;
+    }
+    const bool signedIn = m_auth && m_auth->hasSession();
+    const bool online = m_auth && m_auth->isOnline();
+    qInfo() << "AnnotateWindow: watermark plan refresh signedIn=" << signedIn << "online=" << online
+            << "cloud=" << (m_cloud != nullptr) << "oldPlan=" << m_plan;
+    if (!signedIn) {
+        m_plan.clear();
+        LocalStore::clearPlan();
+        if (m_view && m_view->viewport()) {
+            m_view->viewport()->update();
+        }
+        qInfo() << "AnnotateWindow: watermark on, signed out";
+        updateWatermarkBar();
+        return;
+    }
+    loadCachedPlan();
+    if (m_view && m_view->viewport()) {
+        m_view->viewport()->update();
+    }
+    qInfo() << "AnnotateWindow: watermark after cache plan=" << m_plan << "pro=" << hasProPlan();
+    updateWatermarkBar();
+    if (!m_cloud || !online) {
+        qWarning() << "AnnotateWindow: keep cached plan, cannot fetch cloud=" << (m_cloud != nullptr)
+                   << "online=" << online << "plan=" << m_plan;
+        return;
+    }
+    m_watermarkPlanBusy = true;
+    QPointer<AnnotateWindow> self = this;
+    const QString uid = m_auth->uid();
+    int used = 0;
+    QString plan;
+    QString error;
+    qInfo() << "AnnotateWindow: watermark plan fetch start uidChars=" << uid.size();
+    const bool ok = m_cloud->fetchQuota(&used, &plan, &error);
+    if (!self) {
+        qWarning() << "AnnotateWindow: watermark plan fetch window gone ok=" << ok;
+        return;
+    }
+    m_watermarkPlanBusy = false;
+    if (!m_auth->hasSession() || m_auth->uid() != uid) {
+        m_plan.clear();
+        if (m_view && m_view->viewport()) {
+            m_view->viewport()->update();
+        }
+        qInfo() << "AnnotateWindow: watermark plan discarded after fetch signedIn="
+                << m_auth->hasSession() << "uidMatch=" << (m_auth->uid() == uid);
+        if (m_auth->hasSession() && m_auth->uid() != uid) {
+            qInfo() << "AnnotateWindow: watermark plan refetch for new session";
+            refreshWatermarkPlan();
+        }
+        updateWatermarkBar();
+        return;
+    }
+    if (!ok) {
+        if (error == QLatin1String("PRO_GRACE_ENDED")) {
+            m_plan = QStringLiteral("free");
+            LocalStore::setPlan(uid, m_plan);
+            qWarning() << "AnnotateWindow: watermark plan grace ended, cached free";
+        } else {
+            qWarning() << "AnnotateWindow: watermark plan fetch failed keep cache code=" << error
+                       << "plan=" << m_plan << "used=" << used;
+        }
+        if (m_view && m_view->viewport()) {
+            m_view->viewport()->update();
+        }
+        updateWatermarkBar();
+        return;
+    }
+    m_plan = plan;
+    LocalStore::setPlan(uid, m_plan);
+    if (m_view && m_view->viewport()) {
+        m_view->viewport()->update();
+    }
+    qInfo() << "AnnotateWindow: watermark plan=" << m_plan << "used=" << used
+            << "pro=" << hasProPlan() << "watermark=" << !hasProPlan();
+    updateWatermarkBar();
+}
+
+// ─── Ariadne's Thread [AT-0422] ─────────────────────
+// What: Bottom watermark bar layout, visibility, Remove Watermark checkout, Sign Up
+// Why:  Free exports show the grid; users need Pro upgrade and registration in the editor
+// Date: 2026-09-04
+// Related: [AT-0414] AnnotateWindow.cpp:paintWatermark, [AT-0193] AuthSession.cpp:startWebsiteSignIn
+// ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────
+int AnnotateWindow::editorChromeBottomInset() const
+{
+    int inset = 0;
+    if (QStatusBar *bar = statusBar(); bar && bar->isVisible()) {
+        inset = bar->height();
+    }
+    qInfo() << "AnnotateWindow: editorChromeBottomInset=" << inset;
+    return inset;
+}
+
+void AnnotateWindow::layoutWatermarkBar()
+{
+    if (!m_watermarkBar || !m_watermarkBar->isVisible()) {
+        return;
+    }
+    m_watermarkBar->adjustSize();
+    const QSize hint = m_watermarkBar->sizeHint();
+    const int margin = 12;
+    const int bottomChrome = editorChromeBottomInset();
+    const QRect canvas = editorCanvasRect();
+    const int maxW = qMax(1, canvas.width() - margin * 2);
+    const int w = qMin(hint.width(), maxW);
+    const int h = hint.height();
+    const int x = canvas.x() + qMax(margin, (canvas.width() - w) / 2);
+    const int y = qMax(canvas.y() + margin, canvas.bottom() - h - margin);
+    m_watermarkBar->setGeometry(x, y, w, h);
+    m_watermarkBar->raise();
+    qInfo() << "AnnotateWindow: watermark bar geo=" << m_watermarkBar->geometry() << "hint=" << hint
+            << "canvas=" << canvas << "window=" << size() << "bottomChrome=" << bottomChrome;
+}
+
+void AnnotateWindow::updateWatermarkBar()
+{
+    if (!m_watermarkBar) {
+        qWarning() << "AnnotateWindow: updateWatermarkBar missing bar";
+        return;
+    }
+    const bool show = !hasProPlan();
+    const bool signedIn = m_auth && m_auth->hasSession();
+    if (m_signUpBtn) {
+        m_signUpBtn->setVisible(!signedIn);
+    }
+    if (show) {
+        m_watermarkBar->show();
+        layoutWatermarkBar();
+    } else {
+        m_watermarkBar->hide();
+    }
+    fitShotToWindow();
+    qInfo() << "AnnotateWindow: updateWatermarkBar show=" << show << "plan=" << m_plan
+            << "signedIn=" << signedIn << "pro=" << hasProPlan();
+}
+
+void AnnotateWindow::openSignUp()
+{
+    qInfo() << "AnnotateWindow: openSignUp";
+    if (!m_auth) {
+        qWarning() << "AnnotateWindow: openSignUp missing AuthSession";
+        showError(QStringLiteral("STORAGE_NEED_SIGN_IN"));
+        return;
+    }
+    if (m_auth->hasSession()) {
+        qInfo() << "AnnotateWindow: openSignUp skipped, already signed in";
+        return;
+    }
+    QString error;
+    if (!m_auth->startWebsiteSignIn(&error)) {
+        if (error == QLatin1String("AUTH_IN_PROGRESS")) {
+            qInfo() << "AnnotateWindow: openSignUp waiting for in-progress website sign-in";
+            return;
+        }
+        qWarning() << "AnnotateWindow: openSignUp failed code=" << error;
+        showError(error.isEmpty() ? QStringLiteral("AUTH_OAUTH_FAILED") : error);
+        return;
+    }
+    qInfo() << "AnnotateWindow: openSignUp browser opened hasSession=" << m_auth->hasSession();
+}
+
+// ─── Ariadne's Thread [AT-0552] ─────────────────────
+// What: Remove Watermark opens the Polar checkout link in the default browser
+// Why:  Sign-in sent users to seenshot.app; the button must go straight to purchase
+// Date: 2026-09-05
+// Related: [AT-0422] AnnotateWindow.cpp:updateWatermarkBar, [AT-0209] MacPermissions.mm:openDefaultBrowser
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::openRemoveWatermark()
+{
+    qInfo() << "AnnotateWindow: openRemoveWatermark plan=" << m_plan
+            << "signedIn=" << (m_auth && m_auth->hasSession()) << "pro=" << hasProPlan();
+    if (hasProPlan()) {
+        qInfo() << "AnnotateWindow: openRemoveWatermark skipped, already pro";
+        return;
+    }
+    const QUrl checkout(
+        QStringLiteral("https://polar.sh/checkout/polar_c_U423wWeu3Dq0uG812rCrg2eqszpZI7YHaCggP27d2Rq"));
+    qInfo() << "AnnotateWindow: openRemoveWatermark checkout valid=" << checkout.isValid()
+            << " scheme=" << checkout.scheme() << " host=" << checkout.host() << " path=" << checkout.path()
+            << " urlChars=" << checkout.toString().size();
+    if (!checkout.isValid() || checkout.scheme() != QLatin1String("https")
+        || checkout.host() != QLatin1String("polar.sh")) {
+        qWarning() << "AnnotateWindow: openRemoveWatermark rejected checkout valid=" << checkout.isValid()
+                   << " scheme=" << checkout.scheme() << " host=" << checkout.host();
+        showError(QStringLiteral("UNKNOWN_ERROR"));
+        return;
+    }
+    if (!MacPermissions::openDefaultBrowser(checkout)) {
+        qWarning() << "AnnotateWindow: openRemoveWatermark browser failed host=" << checkout.host()
+                   << " path=" << checkout.path();
+        showError(QStringLiteral("UNKNOWN_ERROR"));
+        return;
+    }
+    qInfo() << "AnnotateWindow: openRemoveWatermark browser opened host=" << checkout.host();
+}
+
+void AnnotateWindow::openProCheckout()
+{
+    qInfo() << "AnnotateWindow: openProCheckout plan=" << m_plan;
+    if (!m_cloud) {
+        qWarning() << "AnnotateWindow: openProCheckout missing CloudClient";
+        showError(QStringLiteral("OFFLINE_CLOUD_UNAVAILABLE"));
+        return;
+    }
+    QString url;
+    QString error;
+    if (!m_cloud->createCheckoutUrl(&url, &error)) {
+        qWarning() << "AnnotateWindow: openProCheckout failed code=" << error << " urlEmpty=" << url.isEmpty();
+        showError(error.isEmpty() ? QStringLiteral("UNKNOWN_ERROR") : error);
+        return;
+    }
+    const QUrl checkout(url);
+    qInfo() << "AnnotateWindow: openProCheckout urlChars=" << url.size() << " host=" << checkout.host();
+    if (!MacPermissions::openDefaultBrowser(checkout)) {
+        qWarning() << "AnnotateWindow: openProCheckout browser failed host=" << checkout.host();
+        showError(QStringLiteral("UNKNOWN_ERROR"));
     }
 }
 
@@ -2497,6 +2882,12 @@ void AnnotateWindow::updateBlurTypeVisibility()
     qInfo() << "AnnotateWindow: blur type checkboxes visible=" << on;
 }
 
+// ─── Ariadne's Thread [AT-0554] ─────────────────────
+// What: Force Blur column geometry then queue a second chrome layout
+// Why:  First show left QGraphicsView full-width so the canvas painted over the sidebar
+// Date: 2026-09-05
+// Related: [AT-0398] AnnotateWindow.cpp:EditorView, [AT-0554] AnnotateWindow.cpp:editorCanvasRect
+// ─────────────────────────────────────────────────────
 void AnnotateWindow::setBlurSidebarVisible(bool on)
 {
     if (!m_blurSidebar) {
@@ -2509,18 +2900,52 @@ void AnnotateWindow::setBlurSidebarVisible(bool on)
             << "body=" << (m_editorBody ? m_editorBody->size() : QSize());
     m_blurSidebar->setVisible(on);
     if (m_editorBody && m_editorBody->layout()) {
-        m_editorBody->layout()->activate();
+        QLayout *lay = m_editorBody->layout();
+        lay->invalidate();
+        m_editorBody->updateGeometry();
+        lay->activate();
+        for (int i = 0; i < lay->count(); ++i) {
+            QLayoutItem *item = lay->itemAt(i);
+            if (!item || !item->widget()) {
+                continue;
+            }
+            const QRect geo = item->geometry();
+            qInfo() << "AnnotateWindow: blur sidebar body item i=" << i
+                    << "name=" << item->widget()->objectName() << "itemGeo=" << geo
+                    << "widgetGeo=" << item->widget()->geometry()
+                    << "visible=" << item->widget()->isVisible();
+            if (item->widget()->isVisible() && geo.isValid() && !geo.isEmpty()
+                && item->widget()->geometry() != geo) {
+                qInfo() << "AnnotateWindow: blur sidebar force geometry" << item->widget()->objectName()
+                        << item->widget()->geometry() << "->" << geo;
+                item->widget()->setGeometry(geo);
+            }
+        }
         qInfo() << "AnnotateWindow: blur sidebar layout activated on=" << on
                 << "sidebarGeo=" << m_blurSidebar->geometry()
                 << "viewGeo=" << (m_view ? m_view->geometry() : QRect())
                 << "body=" << m_editorBody->size();
     }
+    if (on) {
+        m_blurSidebar->raise();
+    }
     relayoutEditorChrome();
+    QMetaObject::invokeMethod(
+        this,
+        [this, on]() {
+            qInfo() << "AnnotateWindow: blur sidebar queued relayout on=" << on
+                    << "sidebarGeo=" << (m_blurSidebar ? m_blurSidebar->geometry() : QRect())
+                    << "viewGeo=" << (m_view ? m_view->geometry() : QRect())
+                    << "viewVp=" << (m_view && m_view->viewport() ? m_view->viewport()->size() : QSize());
+            relayoutEditorChrome();
+        },
+        Qt::QueuedConnection);
 }
 
 void AnnotateWindow::relayoutEditorChrome()
 {
     layoutToolsBar();
+    layoutWatermarkBar();
     fitShotToWindow();
     layoutPhotoOverlay();
     layoutUpdateCard();
@@ -3173,9 +3598,12 @@ void AnnotateWindow::applyAnnotateChromeTheme()
     styleGrayToolbarButton(m_saveBtn, true);
     styleGrayToolbarButton(m_photoPictureButton, true);
     styleGrayToolbarButton(m_photoTimer5Button, true);
+    styleGrayToolbarButton(m_signUpBtn, true);
     layoutToolsBar();
+    layoutWatermarkBar();
     qInfo() << "AnnotateWindow: gray buttons styled save=" << (m_saveBtn != nullptr)
-            << "picture=" << (m_photoPictureButton != nullptr) << "timer=" << (m_photoTimer5Button != nullptr);
+            << "picture=" << (m_photoPictureButton != nullptr) << "timer=" << (m_photoTimer5Button != nullptr)
+            << "signUp=" << (m_signUpBtn != nullptr);
 }
 
 // ─── Ariadne's Thread [AT-0080] ─────────────────────
@@ -4758,6 +5186,60 @@ void AnnotateWindow::paintShotBorder(QPainter *painter) const
     } else {
         painter->drawRect(box);
     }
+    painter->restore();
+}
+
+void AnnotateWindow::paintWatermark(QPainter *painter) const
+{
+    paintWatermark(painter, canvasRect());
+}
+
+// ─── Ariadne's Thread [AT-0414] ─────────────────────
+// What: Tile seenshot.app in black at 10% opacity over the canvas when plan is not pro
+// Why:  Unsigned and non-Pro saves/shares must carry the grid; Blur still samples the scene without it
+// Date: 2026-09-04
+// Related: [AT-0076] AnnotateWindow.cpp:exportedImage, [AT-0327] AnnotateWindow.cpp:paintShotBorder
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::paintWatermark(QPainter *painter, const QRectF &target) const
+{
+    if (!painter) {
+        qWarning() << "AnnotateWindow: paintWatermark null painter";
+        return;
+    }
+    if (hasProPlan()) {
+        return;
+    }
+    if (target.width() < 8.0 || target.height() < 8.0) {
+        qInfo() << "AnnotateWindow: paintWatermark skip small target=" << target << "plan=" << m_plan;
+        return;
+    }
+    const QString text = QUrl(Config::websiteBaseUrl()).host();
+    if (text.isEmpty()) {
+        qWarning() << "AnnotateWindow: paintWatermark empty host base=" << Config::websiteBaseUrl();
+        return;
+    }
+    QFont font;
+    font.setBold(true);
+    const int pixel = qBound(14, qRound(qMin(target.width(), target.height()) * 0.04), 48);
+    font.setPixelSize(pixel);
+    const QFontMetrics fm(font);
+    const int textW = fm.horizontalAdvance(text);
+    const int gapX = qMax(fm.averageCharWidth() * 3, 16);
+    const int gapY = qMax(fm.height() / 2, 8);
+    const int tileW = qMax(1, textW + gapX);
+    const int tileH = qMax(1, fm.height() + gapY);
+    QPixmap tile(tileW, tileH);
+    tile.fill(Qt::transparent);
+    {
+        QPainter tp(&tile);
+        tp.setRenderHint(QPainter::TextAntialiasing);
+        tp.setFont(font);
+        tp.setPen(QColor(0, 0, 0, 26));
+        tp.drawText(QRect(0, 0, tileW, tileH), Qt::AlignCenter, text);
+    }
+    painter->save();
+    painter->setClipRect(target);
+    painter->drawTiledPixmap(target, tile);
     painter->restore();
 }
 

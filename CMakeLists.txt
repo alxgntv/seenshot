@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-# ─── Ariadne's Thread [AT-0399] ─────────────────────
-# What: Bundle version 1.2.0
-# Why:  Ship auto-blur, Background frame edits, and Intel Mac x86_64 builds
-# Date: 2026-09-04
-# Related: [AT-0399] packaging/macos/Info.plist, [AT-0399] client/src/main.cpp
+# ─── Ariadne's Thread [AT-0555] ─────────────────────
+# What: Bundle version 1.2.1
+# Why:  Ship Retina capture, ImageIO PNG, Polar checkout, and editor chrome fixes
+# Date: 2026-09-05
+# Related: [AT-0555] packaging/macos/Info.plist, [AT-0555] client/src/main.cpp
 # ─────────────────────────────────────────────────────
-project(SeenShot VERSION 1.2.0 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 1.2.1 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,7 +77,13 @@ set(SEENSHOT_SOURCES
     # Related: [AT-0392] app→SensitiveRedact.mm:detectSensitive, [AT-0396] app→AnnotateWindow.cpp
     # ─────────────────────────────────────────────────────
     client/src/redact/SensitiveRedact.mm
-    client/src/export/CloudPngEncoder.cpp
+    # ─── Ariadne's Thread [AT-0550] ─────────────────────
+    # What: Encode PNG with ImageIO in CloudPngEncoder.mm
+    # Why:  Screenshot.app uses CGImageDestination; Qt PNG plus 2560px cap softened Retina shots
+    # Date: 2026-09-05
+    # Related: [AT-0549] app→ScreenCaptureBackend.mm:captureWithManager, [AT-0006] CloudPngEncoder.h
+    # ─────────────────────────────────────────────────────
+    client/src/export/CloudPngEncoder.mm
     client/src/hotkey/MacHotkeyBackend.mm
     client/src/auth/AuthSession.cpp
     client/src/auth/FirebaseAuthClient.cpp
@@ -128,6 +134,7 @@ set_source_files_properties(
     client/src/app/MacLoginItem.mm
     client/src/app/MacUrlHandler.mm
     client/src/auth/MacOAuthClient.mm
+    client/src/export/CloudPngEncoder.mm
     PROPERTIES COMPILE_FLAGS "-fobjc-arc"
 )
 
@@ -142,6 +149,7 @@ target_link_libraries(SeenShot PRIVATE
     Qt6::Network
     posthog
     "-framework ScreenCaptureKit"
+    "-framework ImageIO"
     "-framework CoreGraphics"
     "-framework AppKit"
     "-framework Carbon"
