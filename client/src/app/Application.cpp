@@ -105,7 +105,7 @@ void Application::finishLaunch()
 {
     bool captureAfterWizard = false;
     // ─── Ariadne's Thread [AT-0303] ─────────────────────
-    // What: Run 6-step FirstRunWizard when onboardingVersion < 1; Dock Regular then Accessory
+    // What: Run 7-step FirstRunWizard when onboardingVersion < 1; Dock Regular then Accessory
     // Why:  firstRunCompleted must not skip setup; Take screenshot Finish starts path capture
     // Date: 2026-08-28
     // Related: [AT-0302] FirstRunWizard.cpp, [AT-0300] MacPermissions.mm:setDockVisible
@@ -333,6 +333,15 @@ bool Application::eventFilter(QObject *watched, QEvent *event)
             } else {
                 qInfo() << "Application: annotate already key after Dock/Cmd+Tab";
             }
+        }
+        // ─── Ariadne's Thread [AT-0670] ─────────────────────
+        // What: Tell SparkleUpdater when the process becomes the front app
+        // Why:  A deferred auto-install must wait until SeenShot is front
+        // Date: 2026-09-10
+        // Related: [AT-0669] SparkleUpdater.mm:tryStartPendingAutoInstall, [AT-0336] Application.cpp:eventFilter
+        // ─────────────────────────────────────────────────────
+        if (SparkleUpdater *updater = SparkleUpdater::instance()) {
+            updater->applicationBecameActive();
         }
     }
     if (watched == qApp && event->type() == QEvent::Quit) {

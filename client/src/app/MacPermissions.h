@@ -70,4 +70,13 @@ public:
     static QString runningAppPath();
     static bool hasCamera();
     static void requestCamera(const std::function<void(bool)> &done);
+    // ─── Ariadne's Thread [AT-0667] ─────────────────────
+    // What: Probe and request write on the host .app so Sparkle can replace it later
+    // Why:  There is no TCC for updates. The replace sheet appears only when the bundle is not writable
+    // Date: 2026-09-10
+    // Related: [AT-0668] FirstRunWizard.cpp:UpdatesPage, [AT-0669] SparkleUpdater.mm:tryStartPendingAutoInstall
+    // ─────────────────────────────────────────────────────
+    static bool isApplicationActive();
+    static bool hostBundleWritable();
+    static bool ensureHostBundleWritable();
 };

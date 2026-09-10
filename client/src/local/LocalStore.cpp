@@ -68,7 +68,7 @@ void LocalStore::setFirstRunCompleted()
 }
 
 // ─── Ariadne's Thread [AT-0301] ─────────────────────
-// What: Persist onboardingVersion=1 when the 6-step QWizard finishes
+// What: Persist onboardingVersion=1 when the 7-page QWizard finishes
 // Why:  firstRunCompleted is already true on 0.1.4 installs; that must not skip setup
 // Date: 2026-08-28
 // Related: [AT-0303] Application.cpp:start, [AT-0304] main.cpp
@@ -102,8 +102,37 @@ void LocalStore::resetOnboarding()
 {
     QSettings settings;
     settings.setValue(QStringLiteral("onboardingVersion"), 0);
+    settings.remove(QStringLiteral("autoInstallAllowed"));
     settings.sync();
-    qInfo() << "LocalStore: onboardingVersion reset to 0";
+    qInfo() << "LocalStore: onboardingVersion reset to 0 autoInstallAllowed removed";
+}
+
+// ─── Ariadne's Thread [AT-0671] ─────────────────────
+// What: Persist whether onboarding allowed Sparkle to auto-install
+// Why:  A refused replace-app prompt must block auto-install for every version gap
+// Date: 2026-09-10
+// Related: [AT-0672] FirstRunWizard.cpp:UpdatesPage, [AT-0666] SparkleUpdater.mm:shouldAutoInstall
+// ─────────────────────────────────────────────────────
+bool LocalStore::autoInstallAllowed()
+{
+    QSettings settings;
+    const bool hasKey = settings.contains(QStringLiteral("autoInstallAllowed"));
+    if (hasKey) {
+        const bool allowed = settings.value(QStringLiteral("autoInstallAllowed"), false).toBool();
+        qInfo() << "LocalStore: autoInstallAllowed=" << allowed << " source=key";
+        return allowed;
+    }
+    const bool onboarded = onboardingCompleted();
+    qInfo() << "LocalStore: autoInstallAllowed=" << onboarded << " source=onboardingCompleted hasKey=false";
+    return onboarded;
+}
+
+void LocalStore::setAutoInstallAllowed(bool allowed)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("autoInstallAllowed"), allowed);
+    settings.sync();
+    qInfo() << "LocalStore: autoInstallAllowed set=" << allowed;
 }
 
 // ─── Ariadne's Thread [AT-0175] ─────────────────────

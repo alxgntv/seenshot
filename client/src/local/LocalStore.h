@@ -21,7 +21,7 @@ public:
     static void setFirstRunCompleted();
     // ─── Ariadne's Thread [AT-0301] ─────────────────────
     // What: Gate first-run on onboardingVersion, not firstRunCompleted
-    // Why:  0.1.4 already set firstRunCompleted; everyone must still pass the 6-step wizard
+    // Why:  0.1.4 already set firstRunCompleted, everyone must still pass the 7-page wizard
     // Date: 2026-08-28
     // Related: [AT-0303] Application.cpp:start, [AT-0302] FirstRunWizard.cpp
     // ─────────────────────────────────────────────────────
@@ -29,6 +29,14 @@ public:
     static bool onboardingCompleted();
     static void setOnboardingCompleted();
     static void resetOnboarding();
+    // ─── Ariadne's Thread [AT-0671] ─────────────────────
+    // What: Persist whether onboarding allowed Sparkle to auto-install
+    // Why:  A refused replace-app prompt must block auto-install for every version gap
+    // Date: 2026-09-10
+    // Related: [AT-0672] FirstRunWizard.cpp:UpdatesPage, [AT-0666] SparkleUpdater.mm:shouldAutoInstall
+    // ─────────────────────────────────────────────────────
+    static bool autoInstallAllowed();
+    static void setAutoInstallAllowed(bool allowed);
     // ─── Ariadne's Thread [AT-0175] ─────────────────────
     // What: Persist that this Mac already registered SeenShot with Screen Recording TCC
     // Why:  CGRequestScreenCaptureAccess every launch showed Open Settings while another signed copy was already on

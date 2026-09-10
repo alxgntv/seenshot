@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-# ─── Ariadne's Thread [AT-0658] ─────────────────────
-# What: Bundle version 1.2.3
-# Why:  Sparkle must see a newer CFBundleVersion than the installed 1.2.2
+# ─── Ariadne's Thread [AT-0674] ─────────────────────
+# What: Bundle version 1.2.4
+# Why:  Sparkle must see a newer CFBundleVersion than the installed 1.2.3
 # Date: 2026-09-10
-# Related: [AT-0658] packaging/macos/Info.plist, [AT-0658] client/src/main.cpp, [AT-0654] CloudClient.cpp:fetchQuota
+# Related: [AT-0674] packaging/macos/Info.plist, [AT-0674] client/src/main.cpp, [AT-0673] SparkleUpdater.mm:requestUpdateWritePermission
 # ─────────────────────────────────────────────────────
-project(SeenShot VERSION 1.2.3 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 1.2.4 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -143,6 +143,13 @@ set_source_files_properties(
     client/src/app/MacUrlHandler.mm
     client/src/auth/MacOAuthClient.mm
     client/src/export/CloudPngEncoder.mm
+    # ─── Ariadne's Thread [AT-0660] ─────────────────────
+    # What: Compile SparkleUpdater.mm with ARC
+    # Why:  MRC dropped the foundReply block in replyFoundInstall, SIGSEGV at 0 on Update
+    # Date: 2026-09-10
+    # Related: [AT-0661] SparkleUpdater.mm:replyFoundInstall, [AT-0092] SparkleUpdater.mm
+    # ─────────────────────────────────────────────────────
+    client/src/update/SparkleUpdater.mm
     PROPERTIES COMPILE_FLAGS "-fobjc-arc"
 )
 

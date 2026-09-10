@@ -19,6 +19,7 @@ std::atomic<bool> g_quitAllowed{false};
 #import <Carbon/Carbon.h>
 #import <CoreGraphics/CGWindowLevel.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <Foundation/NSAppleScript.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Security/Security.h>
 
@@ -679,4 +680,66 @@ void MacPermissions::requestCamera(const std::function<void(bool)> &done)
                                      callback(granted);
                                  });
                              }];
+}
+
+bool MacPermissions::isApplicationActive()
+{
+    const bool active = static_cast<bool>([NSApp isActive]);
+    qInfo() << "MacPermissions: isApplicationActive=" << active
+            << " mainThread=" << [NSThread isMainThread];
+    return active;
+}
+
+bool MacPermissions::hostBundleWritable()
+{
+    NSString *path = [[NSBundle mainBundle] bundlePath];
+    const BOOL writable = [[NSFileManager defaultManager] isWritableFileAtPath:path];
+    qInfo() << "MacPermissions: hostBundleWritable=" << static_cast<bool>(writable)
+            << " path=" << QString::fromNSString(path)
+            << " mainThread=" << [NSThread isMainThread];
+    return static_cast<bool>(writable);
+}
+
+// ─── Ariadne's Thread [AT-0667] ─────────────────────
+// What: Ask macOS now to make SeenShot.app writable by the current user
+// Why:  Sparkle shows a replace-app sheet later if the bundle is not writable. That must happen in setup, not over another app
+// Date: 2026-09-10
+// Related: [AT-0668] FirstRunWizard.cpp:UpdatesPage, [AT-0666] SparkleUpdater.mm:shouldAutoInstall
+// ─────────────────────────────────────────────────────
+bool MacPermissions::ensureHostBundleWritable()
+{
+    activateApp();
+    if (hostBundleWritable()) {
+        qInfo() << "MacPermissions: ensureHostBundleWritable already writable";
+        return true;
+    }
+    NSString *path = [[NSBundle mainBundle] bundlePath];
+    NSString *escaped = [path stringByReplacingOccurrencesOfString:@"'" withString:@"'\"'\"'"];
+    NSString *quoted = [NSString stringWithFormat:@"'%@'", escaped];
+    NSString *source = [NSString stringWithFormat:
+        @"do shell script \"/usr/sbin/chown -R \\\"$(/usr/bin/id -un):staff\\\" %@ && /bin/chmod -R u+w %@\" with administrator privileges",
+        quoted, quoted];
+    qInfo() << "MacPermissions: ensureHostBundleWritable run AppleScript admin chown path="
+            << QString::fromNSString(path)
+            << " sourceChars=" << static_cast<int>([source length]);
+    NSAppleScript *script = [[NSAppleScript alloc] initWithSource:source];
+    if (!script) {
+        qWarning() << "MacPermissions: ensureHostBundleWritable AppleScript alloc failed";
+        return hostBundleWritable();
+    }
+    NSDictionary *errorInfo = nil;
+    NSAppleEventDescriptor *result = [script executeAndReturnError:&errorInfo];
+    if (!result) {
+        const QString message = errorInfo[NSAppleScriptErrorMessage]
+            ? QString::fromNSString(errorInfo[NSAppleScriptErrorMessage])
+            : QString();
+        const int number = errorInfo[NSAppleScriptErrorNumber]
+            ? [errorInfo[NSAppleScriptErrorNumber] intValue]
+            : 0;
+        qWarning() << "MacPermissions: ensureHostBundleWritable AppleScript failed number=" << number
+                   << " message=" << message;
+        return hostBundleWritable();
+    }
+    qInfo() << "MacPermissions: ensureHostBundleWritable AppleScript ok";
+    return hostBundleWritable();
 }

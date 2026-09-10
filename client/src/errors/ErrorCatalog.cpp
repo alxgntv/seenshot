@@ -106,8 +106,20 @@ QString ErrorCatalog::message(const QString &code)
         // ─────────────────────────────────────────────────────
         {QStringLiteral("AUTH_DISPOSABLE_EMAIL"),
          QStringLiteral("Please enter your permanent email address.")},
+        // ─── Ariadne's Thread [AT-0664] ─────────────────────
+        // What: Map Sparkle install, auth, download, and write failures to Update copy
+        // Why:  PRD-05 keeps the card after error. Auth cancel must not look like a dead updater
+        // Date: 2026-09-10
+        // Related: [AT-0663] SparkleUpdater.mm:handleUpdaterError, [AT-0002] ErrorCatalog.cpp
+        // ─────────────────────────────────────────────────────
         {QStringLiteral("UPDATE_FAILED"),
-         QStringLiteral("Could not download or install the update. Try again.")},
+         QStringLiteral("Could not install the update. If macOS asked for permission, allow it, then tap Update again.")},
+        {QStringLiteral("UPDATE_AUTH_REQUIRED"),
+         QStringLiteral("macOS needs permission to replace SeenShot in Applications. Allow it when asked, then tap Update again.")},
+        {QStringLiteral("UPDATE_WRITE_DENIED"),
+         QStringLiteral("SeenShot cannot replace the copy in Applications. Keep the app in Applications, then tap Update again.")},
+        {QStringLiteral("UPDATE_DOWNLOAD_FAILED"),
+         QStringLiteral("Could not download the update. Check your connection, then tap Update again.")},
         {QStringLiteral("UPDATE_PERSIST_FAILED"),
          QStringLiteral("Could not save this screenshot before updating. Save a local PNG, then tap Update again.")},
         {QStringLiteral("UNKNOWN_ERROR"),

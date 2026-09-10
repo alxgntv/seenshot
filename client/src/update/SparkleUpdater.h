@@ -27,9 +27,12 @@ public:
     bool isDownloadInFlight() const;
 
     void handlePermission();
-    void handleUpdateFound(const QString &version, bool informationOnly, bool alreadyDownloaded);
+    void handleUpdateFound(const QString &displayVersion, const QString &sparkleVersion, bool informationOnly,
+                           bool alreadyDownloaded);
     void handleNoUpdate();
-    void handleUpdaterError(const QString &detail);
+    void handleUpdaterError(int sparkleCode, const QString &domain, const QString &detail);
+    void handleCycleFinished(int updateCheck, int sparkleCode, const QString &detail);
+    void handleShowInFocus();
     void handleDownloadStarted();
     void handleDownloadExpected(qint64 bytes);
     void handleDownloadReceived(qint64 bytes);
@@ -38,6 +41,7 @@ public:
     void handleReadyToRelaunch();
     void handleInstalling();
     void handleDismissed();
+    void applicationBecameActive();
     void replyFoundInstall();
     void replyFoundDismiss();
     void replyRelaunchInstall();
@@ -49,6 +53,15 @@ private:
     void presentOfferIfPossible();
     void finishInstallWhenSafe();
     bool persistEditorNow();
+    void requestSparkleInstall();
+    void restoreOfferAfterFailure(const QString &catalogCode);
+    void rearmBackgroundCheck();
+    void logHostInstallPermissions();
+    void clearPersistIfEditorOpen();
+    bool shouldAutoInstall(const QString &hostVersion, const QString &foundVersion) const;
+    QString hostBundleVersion() const;
+    void tryStartPendingAutoInstall();
+    bool requestUpdateWritePermission();
 
     QPointer<AnnotateWindow> m_editor;
     QString m_version;
@@ -59,4 +72,7 @@ private:
     bool m_downloadInFlight = false;
     bool m_readyToRelaunch = false;
     bool m_waitingInstall = false;
+    bool m_installWhenFound = false;
+    bool m_rearmAfterCycle = false;
+    bool m_pendingAutoInstall = false;
 };

@@ -262,6 +262,85 @@ private:
     QPushButton *m_allow = nullptr;
 };
 
+class UpdatesPage : public QWizardPage {
+public:
+    explicit UpdatesPage(QWidget *parent = nullptr)
+        : QWizardPage(parent)
+    {
+        setTitle(QStringLiteral("Updates"));
+        auto *layout = new QVBoxLayout(this);
+        auto *body = new QLabel(
+            QStringLiteral("SeenShot installs updates by itself.\n\n"
+                           "macOS may ask for permission to replace the app in Applications. "
+                           "Allow that now so it does not appear while you are in another app.\n\n"
+                           "If you do not allow this, SeenShot will not install updates by itself."),
+            this);
+        body->setWordWrap(true);
+        m_status = new QLabel(this);
+        m_status->setWordWrap(true);
+        m_allow = new QPushButton(QStringLiteral("Allow Updates"), this);
+        connect(m_allow, &QPushButton::clicked, this, [this]() { onAllow(); });
+        layout->addWidget(body);
+        layout->addWidget(m_status);
+        layout->addWidget(m_allow);
+        qInfo() << "FirstRunWizard: UpdatesPage constructed";
+    }
+
+    void initializePage() override
+    {
+        const bool writable = MacPermissions::hostBundleWritable();
+        qInfo() << "FirstRunWizard: UpdatesPage initialize writable=" << writable;
+        paintStatus(writable);
+    }
+
+    // ─── Ariadne's Thread [AT-0672] ─────────────────────
+    // What: Record auto-install consent on Updates Continue, even after a refused admin prompt
+    // Why:  Refusal must finish setup and must block auto-install for every version gap
+    // Date: 2026-09-10
+    // Related: [AT-0671] LocalStore.cpp:setAutoInstallAllowed, [AT-0667] MacPermissions.mm:ensureHostBundleWritable
+    // ─────────────────────────────────────────────────────
+    bool validatePage() override
+    {
+        bool writable = MacPermissions::hostBundleWritable();
+        qInfo() << "FirstRunWizard: UpdatesPage Continue writable=" << writable;
+        if (!writable) {
+            qInfo() << "FirstRunWizard: UpdatesPage Continue request admin write";
+            onAllow();
+            writable = MacPermissions::hostBundleWritable();
+        }
+        LocalStore::setAutoInstallAllowed(writable);
+        qInfo() << "FirstRunWizard: UpdatesPage Continue autoInstallAllowed=" << writable
+                << " advance=true";
+        return true;
+    }
+
+private:
+    void onAllow()
+    {
+        MacPermissions::activateApp();
+        const bool writableBefore = MacPermissions::hostBundleWritable();
+        qInfo() << "FirstRunWizard: Allow Updates writableBefore=" << writableBefore;
+        const bool writableAfter = MacPermissions::ensureHostBundleWritable();
+        qInfo() << "FirstRunWizard: Allow Updates writableAfter=" << writableAfter;
+        LocalStore::setAutoInstallAllowed(writableAfter);
+        paintStatus(writableAfter);
+    }
+
+    void paintStatus(bool writable)
+    {
+        if (writable) {
+            m_status->setText(QStringLiteral("SeenShot can replace the app in Applications."));
+            qInfo() << "FirstRunWizard: UpdatesPage writable";
+            return;
+        }
+        m_status->setText(QStringLiteral("Allow permission to replace SeenShot in Applications. If you continue without it, updates will not install by themselves."));
+        qInfo() << "FirstRunWizard: UpdatesPage not writable";
+    }
+
+    QLabel *m_status = nullptr;
+    QPushButton *m_allow = nullptr;
+};
+
 class LoginItemPage : public QWizardPage {
 public:
     explicit LoginItemPage(QWidget *parent = nullptr)
@@ -365,6 +444,7 @@ FirstRunWizard::FirstRunWizard(QWidget *parent)
     addPage(new HotkeyPage(HotkeyPage::Path, this));
     addPage(new HotkeyPage(HotkeyPage::FullScreen, this));
     addPage(new ScreenRecordingPage(this));
+    addPage(new UpdatesPage(this));
     addPage(new LoginItemPage(this));
     addPage(new ReadyPage(this));
     setMinimumWidth(640);
