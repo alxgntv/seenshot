@@ -110,6 +110,53 @@ bool MacPermissions::openDefaultBrowser(const QUrl &pageUrl)
     return true;
 }
 
+// ─── Ariadne's Thread [AT-0627] ─────────────────────
+// What: Resolve a bundle id with URLForApplicationWithBundleIdentifier then openApplicationAtURL
+// Why:  launchApplication and launchAppWithBundleIdentifier are deprecated, NSWorkspaceOpenConfiguration is current
+// Date: 2026-09-06
+// Related: [AT-0209] MacPermissions.mm:openDefaultBrowser, Apple NSWorkspace URLForApplicationWithBundleIdentifier
+// ─────────────────────────────────────────────────────
+bool MacPermissions::openApplicationWithBundleIdentifier(const QString &bundleId)
+{
+    if (bundleId.isEmpty()) {
+        qWarning() << "MacPermissions: openApplicationWithBundleIdentifier empty bundleId";
+        return false;
+    }
+    const QString requestedId = bundleId;
+    NSString *nsId = requestedId.toNSString();
+    NSURL *url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:nsId];
+    if (url == nil) {
+        qInfo() << "MacPermissions: openApplicationWithBundleIdentifier not installed bundleId=" << requestedId;
+        return false;
+    }
+    const QString path = QString::fromNSString(url.path ?: @"");
+    NSArray<NSRunningApplication *> *running =
+        [NSRunningApplication runningApplicationsWithBundleIdentifier:nsId];
+    const int runningCount = running != nil ? static_cast<int>(running.count) : 0;
+    qInfo() << "MacPermissions: openApplicationWithBundleIdentifier bundleId=" << requestedId << "path=" << path
+            << "runningCount=" << runningCount << "mainThread=" << [NSThread isMainThread];
+    NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+    config.activates = YES;
+    config.createsNewApplicationInstance = NO;
+    [[NSWorkspace sharedWorkspace] openApplicationAtURL:url
+                                          configuration:config
+                                      completionHandler:^(NSRunningApplication *app, NSError *error) {
+                                          const bool ok = (error == nil);
+                                          const QString openedBundle = app.bundleIdentifier
+                                              ? QString::fromNSString(app.bundleIdentifier)
+                                              : QString();
+                                          const pid_t pid = app != nil ? app.processIdentifier : 0;
+                                          const QString errText = error
+                                              ? QString::fromNSString(error.localizedDescription)
+                                              : QString();
+                                          qInfo() << "MacPermissions: openApplicationWithBundleIdentifier completion"
+                                                  << "ok=" << ok << "requested=" << requestedId
+                                                  << "openedBundle=" << openedBundle << "pid=" << static_cast<int>(pid)
+                                                  << "error=" << errText << "path=" << path;
+                                      }];
+    return true;
+}
+
 // ─── Ariadne's Thread [AT-0118] ─────────────────────
 // What: Pin region overlay as key window above others
 // Why:  LSUIElement Tool window stayed invisible; hotkey left capture stuck

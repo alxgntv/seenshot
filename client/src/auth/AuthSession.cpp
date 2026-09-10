@@ -303,6 +303,7 @@ void AuthSession::signOut()
         m_tokens = FirebaseTokens{};
     }
     LocalStore::clearPendingSignInEmail();
+    LocalStore::clearPlan();
     emit sessionChanged();
 }
 
@@ -429,8 +430,15 @@ bool AuthSession::loadPendingPkce(QString *verifier, QString *state, QString *er
 bool AuthSession::exchangeAuthorizationCode(const QString &code, const QString &verifier, QString *customToken,
                                             QString *errorCode)
 {
-    const QUrl tokenUrl(Config::websiteBaseUrl() + QStringLiteral("/oauth/token"));
-    qInfo() << "AuthSession: POST oauth token host=" << tokenUrl.host();
+    // ─── Ariadne's Thread [AT-0641] ─────────────────────
+    // What: POST the Mac PKCE code to /oauth/token/ not /oauth/token
+    // Why:  seenshot.app trailingSlash 308s the no-slash POST, then AuthSession treats 308 as AUTH_OAUTH_FAILED
+    // Date: 2026-09-07
+    // Related: [AT-0638] seenshot-web→middleware.ts:oauthAuthorizeResponse, [AT-0040] seenshot-web→lib/oauth.ts:handleTokenPost
+    // ─────────────────────────────────────────────────────
+    const QUrl tokenUrl(Config::websiteBaseUrl() + QStringLiteral("/oauth/token/"));
+    qInfo() << "AuthSession: POST oauth token host=" << tokenUrl.host() << " path=" << tokenUrl.path()
+            << " codeChars=" << code.size() << " verifierChars=" << verifier.size();
     QUrlQuery form;
     form.addQueryItem(QStringLiteral("grant_type"), QStringLiteral("authorization_code"));
     form.addQueryItem(QStringLiteral("code"), code);
@@ -457,13 +465,15 @@ bool AuthSession::exchangeAuthorizationCode(const QString &code, const QString &
         return false;
     }
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QUrl redirect = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
     const QByteArray body = reply->readAll();
     reply->deleteLater();
-    qInfo() << "AuthSession: oauth token status=" << status << " bytes=" << body.size();
+    qInfo() << "AuthSession: oauth token status=" << status << " bytes=" << body.size()
+            << " redirect=" << redirect.toString();
     const QJsonObject json = QJsonDocument::fromJson(body).object();
     if (status < 200 || status >= 300) {
         const QString oauthErr = json.value(QStringLiteral("error")).toString();
-        qWarning() << "AuthSession: oauth token error=" << oauthErr;
+        qWarning() << "AuthSession: oauth token error=" << oauthErr << " status=" << status;
         if (errorCode) {
             *errorCode = QStringLiteral("AUTH_OAUTH_FAILED");
         }
@@ -477,6 +487,7 @@ bool AuthSession::exchangeAuthorizationCode(const QString &code, const QString &
         }
         return false;
     }
+    qInfo() << "AuthSession: oauth token custom_token chars=" << token.size();
     *customToken = token;
     return true;
 }

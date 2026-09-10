@@ -19,13 +19,13 @@ int main(int argc, char *argv[])
 {
     QApplication::setApplicationName(QStringLiteral("SeenShot"));
     QApplication::setOrganizationName(QStringLiteral("SeenShot"));
-    // ─── Ariadne's Thread [AT-0555] ─────────────────────
-    // What: Settings and logs report 1.2.1
+    // ─── Ariadne's Thread [AT-0651] ─────────────────────
+    // What: Settings and logs report 1.2.2
     // Why:  Sparkle and the GitHub tag must match CFBundleShortVersionString
-    // Date: 2026-09-05
-    // Related: [AT-0555] CMakeLists.txt, [AT-0555] packaging/macos/Info.plist
+    // Date: 2026-09-10
+    // Related: [AT-0651] CMakeLists.txt, [AT-0651] packaging/macos/Info.plist
     // ─────────────────────────────────────────────────────
-    QApplication::setApplicationVersion(QStringLiteral("1.2.1"));
+    QApplication::setApplicationVersion(QStringLiteral("1.2.2"));
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     const QString icns = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../Resources/SeenShot.icns"));

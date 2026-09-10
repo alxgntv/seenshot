@@ -973,13 +973,20 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
     // Date: 2026-08-29
     // Related: [AT-0381] packaging/macos/agents, [AT-0379] AnnotateWindow.cpp:showCopyHint
     // ─────────────────────────────────────────────────────
+    // ─── Ariadne's Thread [AT-0627] ─────────────────────
+    // What: Agent buttons copy the PNG then open the matching .app by official bundle id
+    // Why:  Clicking Cursor, Codex, Claude, or OpenCode should switch to that app after clipboard
+    // Date: 2026-09-06
+    // Related: [AT-0627] MacPermissions.mm:openApplicationWithBundleIdentifier, [AT-0368] AnnotateWindow.cpp:copyExportedImageToClipboard
+    // ─────────────────────────────────────────────────────
     const struct {
         const char *file;
         const char *name;
-    } agents[] = {{"claude.svg", "Claude"},
-                   {"codex.svg", "Codex"},
-                   {"cursor.svg", "Cursor"},
-                   {"opencode.svg", "OpenCode"}};
+        const char *bundleId;
+    } agents[] = {{"claude.svg", "Claude", "com.anthropic.claudefordesktop"},
+                   {"codex.svg", "Codex", "com.openai.codex"},
+                   {"cursor.svg", "Cursor", "com.todesktop.230313mzl4w4u92"},
+                   {"opencode.svg", "OpenCode", "ai.opencode.desktop"}};
     for (const auto &agent : agents) {
         auto *btn = new QToolButton(toolbar);
         btn->setIcon(macResourceIcon(QString::fromUtf8(agent.file)));
@@ -990,15 +997,17 @@ AnnotateWindow::AnnotateWindow(const QImage &image, AuthSession *auth, CloudClie
         btn->setAutoRaise(true);
         const QString agentName = QString::fromUtf8(agent.name);
         const QString agentFile = QString::fromUtf8(agent.file);
-        connect(btn, &QToolButton::clicked, this, [this, agentName, agentFile, btn]() {
+        const QString bundleId = QString::fromUtf8(agent.bundleId);
+        connect(btn, &QToolButton::clicked, this, [this, agentName, agentFile, bundleId, btn]() {
             qInfo() << "AnnotateWindow: agent copy click name=" << agentName
-                    << "file=" << agentFile
+                    << "file=" << agentFile << "bundleId=" << bundleId
                     << "btn=" << static_cast<void *>(btn) << "size=" << btn->size();
-            copyExportedImageToClipboard(btn, agentName);
+            copyExportedImageToClipboard(btn, agentName, bundleId);
         });
         toolbar->addWidget(btn);
         qInfo() << "AnnotateWindow: agent button name=" << agent.name
-                << "file=" << agent.file << "iconNull=" << btn->icon().isNull();
+                << "file=" << agent.file << "bundleId=" << agent.bundleId
+                << "iconNull=" << btn->icon().isNull();
     }
     // ─── Ariadne's Thread [AT-0370] ─────────────────────
     // What: Trailing QToolBar separator after the agent copy icons
@@ -1942,20 +1951,28 @@ bool AnnotateWindow::ensureOnlineSignedIn(QString *errorCode)
 // Date: 2026-09-05
 // Related: [AT-0550] CloudPngEncoder.mm:encode, [AT-0215] AnnotateWindow.cpp:saveLocal
 // ─────────────────────────────────────────────────────
-void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString &agentName)
+// ─── Ariadne's Thread [AT-0627] ─────────────────────
+// What: After clipboard PNG, open the agent .app by CFBundleIdentifier
+// Why:  Copy alone left the user in SeenShot. The click should switch to Cursor, Codex, Claude, OpenCode
+// Date: 2026-09-06
+// Related: [AT-0627] MacPermissions.mm:openApplicationWithBundleIdentifier, [AT-0368] AnnotateWindow.cpp:copyExportedImageToClipboard
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString &agentName,
+                                                 const QString &bundleId)
 {
     commitTextEdit();
     const QImage image = exportedImage();
     if (image.isNull() || image.width() < 1 || image.height() < 1) {
         qWarning() << "AnnotateWindow: copy screenshot skipped empty size=" << image.size()
-                   << "agent=" << agentName << "anchor=" << static_cast<void *>(anchor);
+                   << "agent=" << agentName << "bundleId=" << bundleId
+                   << "anchor=" << static_cast<void *>(anchor);
         return;
     }
     QString encodeCode;
     const QByteArray png = CloudPngEncoder::encode(image, &encodeCode);
     if (png.isEmpty()) {
         qWarning() << "AnnotateWindow: copy screenshot PNG encode failed size=" << image.size()
-                   << "agent=" << agentName << "encodeCode=" << encodeCode;
+                   << "agent=" << agentName << "bundleId=" << bundleId << "encodeCode=" << encodeCode;
         return;
     }
     auto *mime = new QMimeData;
@@ -1964,12 +1981,15 @@ void AnnotateWindow::copyExportedImageToClipboard(QWidget *anchor, const QString
     QGuiApplication::clipboard()->setMimeData(mime);
     const QString hint = QStringLiteral("Screenshot copied. Paste it in %1").arg(agentName);
     qInfo() << "AnnotateWindow: copy screenshot pngBytes=" << png.size() << "size=" << image.size()
-            << "format=" << image.format() << "agent=" << agentName << "hint=" << hint
-            << "encodeCode=" << encodeCode
+            << "format=" << image.format() << "agent=" << agentName << "bundleId=" << bundleId
+            << "hint=" << hint << "encodeCode=" << encodeCode
             << "anchor=" << static_cast<void *>(anchor)
             << "anchorSize=" << (anchor ? anchor->size() : QSize())
             << "anchorVisible=" << (anchor && anchor->isVisible());
     showCopyHint(anchor, hint);
+    const bool opened = MacPermissions::openApplicationWithBundleIdentifier(bundleId);
+    qInfo() << "AnnotateWindow: agent open after copy agent=" << agentName << "bundleId=" << bundleId
+            << "opened=" << opened << "pngBytes=" << png.size();
 }
 
 // ─── Ariadne's Thread [AT-0379] ─────────────────────
@@ -2299,10 +2319,13 @@ void AnnotateWindow::refreshWatermarkPlan()
     QPointer<AnnotateWindow> self = this;
     const QString uid = m_auth->uid();
     int used = 0;
+    int limitBytes = 0;
     QString plan;
     QString error;
     qInfo() << "AnnotateWindow: watermark plan fetch start uidChars=" << uid.size();
-    const bool ok = m_cloud->fetchQuota(&used, &plan, &error);
+    const bool ok = m_cloud->fetchQuota(&used, &plan, &limitBytes, &error);
+    qInfo() << "AnnotateWindow: watermark plan fetch used=" << used << " limit=" << limitBytes
+            << " plan=" << plan << " ok=" << ok;
     if (!self) {
         qWarning() << "AnnotateWindow: watermark plan fetch window gone ok=" << ok;
         return;

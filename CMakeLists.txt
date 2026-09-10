@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-# ─── Ariadne's Thread [AT-0555] ─────────────────────
-# What: Bundle version 1.2.1
-# Why:  Ship Retina capture, ImageIO PNG, Polar checkout, and editor chrome fixes
-# Date: 2026-09-05
-# Related: [AT-0555] packaging/macos/Info.plist, [AT-0555] client/src/main.cpp
+# ─── Ariadne's Thread [AT-0651] ─────────────────────
+# What: Bundle version 1.2.2
+# Why:  Sparkle must see a newer CFBundleVersion than the installed 1.2.1
+# Date: 2026-09-10
+# Related: [AT-0651] packaging/macos/Info.plist, [AT-0651] client/src/main.cpp, [AT-0637] .github/workflows/release.yml
 # ─────────────────────────────────────────────────────
-project(SeenShot VERSION 1.2.1 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 1.2.2 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -108,8 +108,16 @@ set(SEENSHOT_ICNS ${CMAKE_SOURCE_DIR}/packaging/macos/SeenShot.icns)
 # Related: [AT-0307] FirstRunWizard.cpp:ScreenRecordingPage
 # ─────────────────────────────────────────────────────
 set(SEENSHOT_SCREEN_REC ${CMAKE_SOURCE_DIR}/packaging/macos/screen-recording-toggle.png)
+# ─── Ariadne's Thread [AT-0645] ─────────────────────
+# What: Bundle Credits.html and third-party license texts in Resources
+# Why:  Sparkle MIT and Qt LGPL notices must ship inside the app
+# Date: 2026-09-09
+# Related: [AT-0645] SettingsWindow.cpp:openLicenses, packaging/macos/Credits.html
+# ─────────────────────────────────────────────────────
+set(SEENSHOT_CREDITS ${CMAKE_SOURCE_DIR}/packaging/macos/Credits.html)
 set_source_files_properties(${SEENSHOT_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 set_source_files_properties(${SEENSHOT_SCREEN_REC} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+set_source_files_properties(${SEENSHOT_CREDITS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 # ─── Ariadne's Thread [AT-0368] ─────────────────────
 # What: Bundle Claude/Cursor/Codex/OpenCode SVG marks in Resources
 # Why:  Annotate toolbar copies the screenshot for paste into agent chats
@@ -125,7 +133,7 @@ set(SEENSHOT_AGENT_ICONS
 foreach(_agent_icon IN LISTS SEENSHOT_AGENT_ICONS)
     set_source_files_properties(${_agent_icon} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 endforeach()
-qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS} ${SEENSHOT_SCREEN_REC} ${SEENSHOT_AGENT_ICONS})
+qt_add_executable(SeenShot MACOSX_BUNDLE ${SEENSHOT_SOURCES} ${SEENSHOT_ICNS} ${SEENSHOT_SCREEN_REC} ${SEENSHOT_CREDITS} ${SEENSHOT_AGENT_ICONS})
 
 set_source_files_properties(
     client/src/camera/CameraCapture.mm
@@ -216,7 +224,13 @@ if(APPLE)
             "${CMAKE_SOURCE_DIR}/packaging/macos/agents/codex.svg"
             "${CMAKE_SOURCE_DIR}/packaging/macos/agents/opencode.svg"
             "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Resources/"
-        COMMENT "Copy agent SVG marks into Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/packaging/macos/Credits.html"
+            "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Resources/Credits.html"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/packaging/macos/licenses"
+            "$<TARGET_BUNDLE_DIR:SeenShot>/Contents/Resources/licenses"
+        COMMENT "Copy agent SVG marks and open-source licenses into Resources"
     )
 endif()
 

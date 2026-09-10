@@ -141,7 +141,7 @@ private slots:
     void onPhotoStillReady(const QImage &image);
     void onPhotoStillFailed(const QString &code);
     void onPhotoCountdownTick();
-    void copyExportedImageToClipboard(QWidget *anchor, const QString &agentName);
+    void copyExportedImageToClipboard(QWidget *anchor, const QString &agentName, const QString &bundleId);
     void showCopyHint(QWidget *anchor, const QString &text);
     void hideCopyHint();
     void layoutCopyHint();

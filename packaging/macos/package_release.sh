@@ -88,9 +88,20 @@ generate_appcast_for() {
   rm -rf "${archives}"
 }
 
-build_arch arm64 "${QT_PREFIX_ARM64:-/opt/homebrew/opt/qtbase}"
-ensure_x86_qt
-build_arch x86_64 "${QT_PREFIX_X86_64:-/usr/local/opt/qtbase}"
+# ─── Ariadne's Thread [AT-0637] ─────────────────────
+# What: SKIP_BUILD=1 reuses already notarized DMGs for appcast and R2
+# Why:  GitHub Actions notarizes each arch in a matrix job. Publish must not rebuild
+# Date: 2026-09-06
+# Related: [AT-0421] packaging/macos/package_release.sh, [AT-0637] .github/workflows/release.yml
+# ─────────────────────────────────────────────────────
+SKIP_BUILD="${SKIP_BUILD:-0}"
+if [[ "${SKIP_BUILD}" != "1" ]]; then
+  build_arch arm64 "${QT_PREFIX_ARM64:-/opt/homebrew/opt/qtbase}"
+  ensure_x86_qt
+  build_arch x86_64 "${QT_PREFIX_X86_64:-/usr/local/opt/qtbase}"
+else
+  log "skip build SKIP_BUILD=1 using existing dmgs"
+fi
 
 DMG_ARM64="${ROOT}/build-arm64/SeenShot-${VERSION}-arm64.dmg"
 DMG_X86="${ROOT}/build-x86_64/SeenShot-${VERSION}-x86_64.dmg"

@@ -249,16 +249,34 @@ bool CloudClient::createCheckoutUrl(QString *url, QString *errorCode)
     return !url->isEmpty();
 }
 
-bool CloudClient::fetchQuota(int *usedBytes, QString *plan, QString *errorCode)
+// ─── Ariadne's Thread [AT-0642] ─────────────────────
+// What: Parse usedBytes, plan, and limitBytes from GET /v1/quota
+// Why:  Settings must show Member 1 GB after redeem, not a hardcoded 10 MB cap
+// Date: 2026-09-09
+// Related: [AT-0643] SettingsWindow.cpp:refreshQuota, [AT-0279] backend→quota.ts:quota
+// ─────────────────────────────────────────────────────
+bool CloudClient::fetchQuota(int *usedBytes, QString *plan, int *limitBytes, QString *errorCode)
 {
     QByteArray response;
     if (!authorizedJson(QStringLiteral("GET"), QStringLiteral("/v1/quota"), {}, &response, errorCode)) {
+        qWarning() << "CloudClient: quota request failed";
         return false;
     }
     const QJsonObject json = QJsonDocument::fromJson(response).object();
-    *usedBytes = json.value(QStringLiteral("usedBytes")).toInt();
-    *plan = json.value(QStringLiteral("plan")).toString();
-    qInfo() << "CloudClient: quota used=" << *usedBytes << " plan=" << *plan;
+    const int used = json.value(QStringLiteral("usedBytes")).toInt();
+    const QString nextPlan = json.value(QStringLiteral("plan")).toString();
+    const int limit = json.value(QStringLiteral("limitBytes")).toInt();
+    if (usedBytes) {
+        *usedBytes = used;
+    }
+    if (plan) {
+        *plan = nextPlan;
+    }
+    if (limitBytes) {
+        *limitBytes = limit;
+    }
+    qInfo() << "CloudClient: quota used=" << used << " plan=" << nextPlan << " limit=" << limit
+            << " hasLimit=" << json.contains(QStringLiteral("limitBytes"));
     return true;
 }
 

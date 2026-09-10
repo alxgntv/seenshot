@@ -31,9 +31,11 @@ private slots:
     void applyHotkeys();
     void onLaunchAtLoginToggled(bool on);
     void onSessionChanged();
+    void openLicenses();
 
 private:
     void updateAccountUi();
+    void applyUpgradeVisibility(const QString &plan);
     void loadHotkeys();
     void loadLaunchAtLogin();
     void showAuthError(const QString &code);
@@ -51,6 +53,7 @@ private:
     QPushButton *m_proBtn = nullptr;
     QPushButton *m_exportBtn = nullptr;
     QPushButton *m_deleteBtn = nullptr;
+    QPushButton *m_licensesBtn = nullptr;
     QLabel *m_version = nullptr;
     bool m_syncingLaunch = false;
     bool m_websiteSignInBusy = false;

@@ -23,6 +23,13 @@ public:
     // Related: [AT-0201] MacOAuthClient.mm:start, [AT-0210] AnnotateWindow.cpp:share
     // ─────────────────────────────────────────────────────
     static bool openDefaultBrowser(const QUrl &pageUrl);
+    // ─── Ariadne's Thread [AT-0627] ─────────────────────
+    // What: Open or activate a macOS .app by CFBundleIdentifier via NSWorkspace
+    // Why:  Agent copy buttons must bring Cursor, Codex, Claude, OpenCode to the front
+    // Date: 2026-09-06
+    // Related: [AT-0209] MacPermissions.mm:openDefaultBrowser, [AT-0368] AnnotateWindow.cpp:copyExportedImageToClipboard
+    // ─────────────────────────────────────────────────────
+    static bool openApplicationWithBundleIdentifier(const QString &bundleId);
     static void pinCaptureOverlay(QWidget *overlay);
     static void pinFloatingToolWindow(QWidget *overlay);
     // ─── Ariadne's Thread [AT-0401] ─────────────────────

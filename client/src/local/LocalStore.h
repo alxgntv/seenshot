@@ -73,6 +73,16 @@ public:
     static void setTextSize(int size);
     static bool textOutline();
     static void setTextOutline(bool on);
+    // ─── Ariadne's Thread [AT-0415] ─────────────────────
+    // What: Persist last quota plan with uid for instant Pro watermark skip
+    // Why:  Fetching /v1/quota after show flashed seenshot.app on Pro for ~2s
+    // Date: 2026-09-04
+    // Related: [AT-0414] AnnotateWindow.cpp:paintWatermark, [AT-0021] LocalStore.h
+    // ─────────────────────────────────────────────────────
+    static QString plan();
+    static QString planUid();
+    static void setPlan(const QString &uid, const QString &plan);
+    static void clearPlan();
     static bool hasEditorSession();
     static bool writeEditorSession(const QJsonObject &json, const QImage &shot,
                                    const QHash<QString, QImage> &assets, QString *errorCode);

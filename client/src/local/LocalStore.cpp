@@ -364,6 +364,50 @@ void LocalStore::setTextOutline(bool on)
     qInfo() << "LocalStore: textOutline set=" << on;
 }
 
+// ─── Ariadne's Thread [AT-0415] ─────────────────────
+// What: Persist last quota plan with uid for instant Pro watermark skip
+// Why:  Fetching /v1/quota after show flashed seenshot.app on Pro for ~2s
+// Date: 2026-09-04
+// Related: [AT-0414] AnnotateWindow.cpp:paintWatermark, [AT-0411] LocalStore.cpp:setTextSize
+// ─────────────────────────────────────────────────────
+QString LocalStore::plan()
+{
+    QSettings settings;
+    const QString plan = settings.value(QStringLiteral("plan")).toString();
+    qInfo() << "LocalStore: plan=" << plan << "uidChars=" << planUid().size();
+    return plan;
+}
+
+QString LocalStore::planUid()
+{
+    QSettings settings;
+    const QString uid = settings.value(QStringLiteral("planUid")).toString();
+    qInfo() << "LocalStore: planUidChars=" << uid.size();
+    return uid;
+}
+
+void LocalStore::setPlan(const QString &uid, const QString &plan)
+{
+    if (uid.isEmpty()) {
+        qWarning() << "LocalStore: setPlan skipped empty uid plan=" << plan;
+        return;
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("planUid"), uid);
+    settings.setValue(QStringLiteral("plan"), plan);
+    settings.sync();
+    qInfo() << "LocalStore: plan set=" << plan << "uidChars=" << uid.size();
+}
+
+void LocalStore::clearPlan()
+{
+    QSettings settings;
+    settings.remove(QStringLiteral("plan"));
+    settings.remove(QStringLiteral("planUid"));
+    settings.sync();
+    qInfo() << "LocalStore: plan cleared";
+}
+
 // ─── Ariadne's Thread [AT-0091] ─────────────────────
 // What: Persist open annotate session for Sparkle relaunch
 // Why:  PRD-05 — install must not wipe the current shot and objects

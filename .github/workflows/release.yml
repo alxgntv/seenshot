@@ -1,8 +1,8 @@
-# ─── Ariadne's Thread [AT-0121] ─────────────────────
-# What: Tag v* builds a notarized zip and publishes Sparkle appcast
-# Why:  Users update from seenshot.app/appcast.xml, not from git
-# Date: 2026-08-26
-# Related: [AT-0120] packaging/macos/package_sparkle.sh, docs/PRD-05-auto-update.md
+# ─── Ariadne's Thread [AT-0637] ─────────────────────
+# What: Tag v* builds arm64 and x86_64 in parallel, notarizes each DMG, then publishes
+# Why:  Each arch must hit Apple notary alone. The site feed and R2 latest must follow both staples
+# Date: 2026-09-06
+# Related: [AT-0120] packaging/macos/package_sparkle.sh, [AT-0421] packaging/macos/package_release.sh, [AT-0521] packaging/macos/upload_r2_release.sh
 # ─────────────────────────────────────────────────────
 name: release
 
@@ -10,15 +10,29 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
+env:
+  SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+  NOTARY_KEY: ${{ secrets.APPLE_API_KEY }}
+  NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+  NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+  NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+  NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+  NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
 jobs:
-  release:
+  version:
     runs-on: macos-14
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,11 +40,16 @@ jobs:
           fetch-depth: 0
 
       - name: Tag version
+        id: tag
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/macos/Info.plist)"
+          fi
           VERSION="${TAG#v}"
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "package_sparkle: tag=${TAG} version=${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "package_sparkle: tag=${TAG} version=${VERSION} refType=${GITHUB_REF_TYPE}"
           PLIST_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/macos/Info.plist)"
           CMAKE_VER="$(awk '/^project\(SeenShot VERSION/{print $3; exit}' CMakeLists.txt)"
           echo "package_sparkle: plist=${PLIST_VER} cmake=${CMAKE_VER}"
@@ -38,11 +57,62 @@ jobs:
             echo "package_sparkle: ERROR version mismatch tag=${VERSION} plist=${PLIST_VER} cmake=${CMAKE_VER}" >&2
             exit 1
           fi
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            if ! git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+              echo "package_sparkle: ERROR workflow_dispatch needs existing tag v${VERSION}" >&2
+              exit 1
+            fi
+            echo "package_sparkle: workflow_dispatch republish tag=v${VERSION}"
+          fi
 
-      - name: Install build tools
+  package:
+    needs: version
+    runs-on: macos-14
+    timeout-minutes: 240
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: arm64
+            qt_prefix: /opt/homebrew/opt/qtbase
+          - arch: x86_64
+            qt_prefix: /usr/local/opt/qtbase
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      SEENSHOT_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
         run: |
-          brew install cmake qt ninja curl
-          echo "package_sparkle: brew qt cmake ready"
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          echo "package_sparkle: xcode-select=$(xcode-select -p) arch=${SEENSHOT_ARCH}"
+
+      - name: Install native cmake
+        run: |
+          brew install cmake ninja curl
+          echo "package_sparkle: native cmake=$(command -v cmake) arch=${SEENSHOT_ARCH}"
+
+      - name: Install arm64 Qt
+        if: matrix.arch == 'arm64'
+        run: |
+          brew install qt
+          echo "package_sparkle: brew arm64 qt prefix=$(brew --prefix qtbase)"
+
+      - name: Install x86_64 Qt via Rosetta Homebrew
+        if: matrix.arch == 'x86_64'
+        run: |
+          echo "package_sparkle: install Rosetta Homebrew qt for x86_64"
+          if [[ ! -x /usr/local/bin/brew ]]; then
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+          arch -x86_64 /usr/local/bin/brew install qt curl
+          if [[ ! -d /usr/local/opt/qtbase ]]; then
+            echo "package_sparkle: ERROR x86_64 qtbase missing after brew" >&2
+            exit 1
+          fi
+          echo "package_sparkle: brew x86_64 qt ready prefix=/usr/local/opt/qtbase"
 
       - name: Sparkle CLI 2.8.1
         run: |
@@ -70,7 +140,7 @@ jobs:
           security set-keychain-settings -lut 21600 "${KEYCHAIN}"
           security unlock-keychain -p "${PASSWORD}" "${KEYCHAIN}"
           security import "${P12}" -k "${KEYCHAIN}" -P "${APPLE_DEVELOPER_ID_P12_PASSWORD}" \
-            -T /usr/bin/codesign -T /usr/bin/security
+            -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcrun
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${PASSWORD}" "${KEYCHAIN}"
           security list-keychain -d user -s "${KEYCHAIN}"
           rm -f "${P12}"
@@ -81,61 +151,116 @@ jobs:
             exit 1
           fi
           echo "CODESIGN_IDENTITY=${IDENTITY}" >> "$GITHUB_ENV"
-          echo "package_sparkle: imported ${IDENTITY}"
+          echo "package_sparkle: imported ${IDENTITY} arch=${SEENSHOT_ARCH}"
 
-      - name: Package zip and appcast
+      - name: Package and notarize
         env:
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-          NOTARY_KEY: ${{ secrets.APPLE_API_KEY }}
-          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          QT_PREFIX_ARM64: /opt/homebrew/opt/qtbase
-          QT_PREFIX_X86_64: /usr/local/opt/qtbase
+          QT_PREFIX: ${{ matrix.qt_prefix }}
+          SKIP_APPCAST: "1"
         run: |
           export CODESIGN_IDENTITY
           export SPARKLE_BIN
           export VERSION
+          export SEENSHOT_ARCH
+          export QT_PREFIX
+          export SKIP_APPCAST
           export GITHUB_REPOSITORY
           if [[ -z "${SPARKLE_ED_PRIVATE_KEY}" ]]; then
             echo "package_release: ERROR secret SPARKLE_ED_PRIVATE_KEY is empty" >&2
             exit 1
           fi
-          if [[ -z "${NOTARY_KEY}" || -z "${NOTARY_KEY_ID}" || -z "${NOTARY_ISSUER}" ]]; then
-            echo "package_release: ERROR notary secrets APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER missing" >&2
+          if [[ -n "${NOTARY_KEY}" && -n "${NOTARY_KEY_ID}" && -n "${NOTARY_ISSUER}" ]]; then
+            echo "package_release: notary via App Store Connect API key arch=${SEENSHOT_ARCH}"
+          elif [[ -n "${NOTARY_APPLE_ID}" && -n "${NOTARY_PASSWORD}" && -n "${NOTARY_TEAM_ID}" ]]; then
+            echo "package_release: notary via Apple ID team=${NOTARY_TEAM_ID} arch=${SEENSHOT_ARCH}"
+          else
+            echo "package_release: ERROR notary secrets missing. Need APPLE_API_ISSUER with APPLE_API_KEY or NOTARY_PASSWORD with NOTARY_APPLE_ID" >&2
             exit 1
           fi
-          if [[ -z "${CLOUDFLARE_API_TOKEN}" ]]; then
-            echo "package_release: skip r2 CLOUDFLARE_API_TOKEN empty"
-            export SKIP_R2=1
+          chmod +x packaging/macos/package_sparkle.sh
+          echo "package_release: start arch=${SEENSHOT_ARCH} qt=${QT_PREFIX} version=${VERSION}"
+          packaging/macos/package_sparkle.sh
+          DMG="build-${SEENSHOT_ARCH}/SeenShot-${VERSION}-${SEENSHOT_ARCH}.dmg"
+          if [[ ! -f "${DMG}" ]]; then
+            echo "package_release: ERROR dmg missing ${DMG}" >&2
+            exit 1
           fi
-          chmod +x packaging/macos/package_release.sh packaging/macos/package_sparkle.sh packaging/macos/upload_r2_release.sh
-          packaging/macos/package_release.sh | tee /tmp/package_release.log
-          DMG_ARM64="$(awk -F= '/^DMG_ARM64=/{print $2}' /tmp/package_release.log)"
-          DMG_X86_64="$(awk -F= '/^DMG_X86_64=/{print $2}' /tmp/package_release.log)"
-          echo "DMG_ARM64=${DMG_ARM64}" >> "$GITHUB_ENV"
-          echo "DMG_X86_64=${DMG_X86_64}" >> "$GITHUB_ENV"
+          echo "package_release: notarized dmg=${DMG} bytes=$(stat -f%z "${DMG}")"
 
-      - name: GitHub Release
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: build-${{ matrix.arch }}/SeenShot-${{ needs.version.outputs.version }}-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+
+  publish:
+    needs: [version, package]
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Sparkle CLI 2.8.1
+        run: |
+          mkdir -p "${HOME}/sparkle-tools"
+          curl -fsSL -o /tmp/Sparkle-2.8.1.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/2.8.1/Sparkle-2.8.1.tar.xz"
+          tar -xJf /tmp/Sparkle-2.8.1.tar.xz -C "${HOME}/sparkle-tools"
+          echo "SPARKLE_BIN=${HOME}/sparkle-tools/bin" >> "$GITHUB_ENV"
+
+      - name: Download arm64 DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: dmg-arm64
+          path: build-arm64
+
+      - name: Download x86_64 DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: dmg-x86_64
+          path: build-x86_64
+
+      - name: Appcast, GitHub Release, R2
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # ─── Ariadne's Thread [AT-0141] ─────────────────────
-          # What: GitHub Release body is git subjects since the previous tag
-          # Why:  Site notes must list product changes in this version, not install copy
-          # Date: 2026-08-26
-          # Related: [AT-0140] docs/index.html:releaseCard, [AT-0121] .github/workflows/release.yml
-          # ─────────────────────────────────────────────────────
+          DMG_ARM64="build-arm64/SeenShot-${VERSION}-arm64.dmg"
+          DMG_X86="build-x86_64/SeenShot-${VERSION}-x86_64.dmg"
+          echo "package_release: publish version=${VERSION} arm64=$(stat -f%z "${DMG_ARM64}") x86_64=$(stat -f%z "${DMG_X86}")"
+          chmod +x packaging/macos/package_release.sh packaging/macos/upload_r2_release.sh
+          export SPARKLE_BIN
+          export VERSION
+          export GITHUB_REPOSITORY
+          export SKIP_BUILD=1
+          if [[ -z "${CLOUDFLARE_API_TOKEN}" ]]; then
+            echo "package_release: skip r2 CLOUDFLARE_API_TOKEN empty"
+            export SKIP_R2=1
+          else
+            echo "package_release: r2 upload after notarized artifacts version=${VERSION}"
+          fi
+          packaging/macos/package_release.sh
           NOTES_FILE="$(mktemp)"
-          TAG_BODY="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")"
-          PREV="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          TAG="v${VERSION}"
+          TAG_BODY="$(git tag -l --format='%(contents)' "${TAG}")"
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           if [[ -n "${TAG_BODY}" ]]; then
             printf '%s\n' "${TAG_BODY}" > "${NOTES_FILE}"
-            echo "package_sparkle: notes from annotated tag ${GITHUB_REF_NAME} chars=${#TAG_BODY}"
+            echo "package_sparkle: notes from annotated tag ${TAG} chars=${#TAG_BODY}"
           elif [[ -n "${PREV}" ]]; then
-            git log "${PREV}..HEAD" --pretty=format:'- %s' > "${NOTES_FILE}"
-            echo "package_sparkle: notes from ${PREV}..HEAD lines=$(wc -l < "${NOTES_FILE}" | tr -d ' ')"
+            git log "${PREV}..${TAG}" --pretty=format:'- %s' > "${NOTES_FILE}"
+            echo "package_sparkle: notes from ${PREV}..${TAG} lines=$(wc -l < "${NOTES_FILE}" | tr -d ' ')"
           else
             printf 'SeenShot %s.\n' "${VERSION}" > "${NOTES_FILE}"
             echo "package_sparkle: no previous tag, default notes version=${VERSION}"
@@ -146,22 +271,30 @@ jobs:
           fi
           echo "package_sparkle: notesChars=$(wc -c < "${NOTES_FILE}" | tr -d ' ')"
           cat "${NOTES_FILE}"
-          gh release create "${GITHUB_REF_NAME}" \
-            "${DMG_ARM64}" \
-            "${DMG_X86_64}" \
-            --title "SeenShot ${VERSION}" \
-            --notes-file "${NOTES_FILE}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "package_sparkle: release ${TAG} exists, uploading assets"
+            gh release upload "${TAG}" "${DMG_ARM64}" "${DMG_X86}" --clobber
+          else
+            gh release create "${TAG}" \
+              "${DMG_ARM64}" \
+              "${DMG_X86}" \
+              --title "SeenShot ${VERSION}" \
+              --notes-file "${NOTES_FILE}"
+          fi
           rm -f "${NOTES_FILE}"
-          echo "package_sparkle: release ${GITHUB_REF_NAME} uploaded"
-
-      - name: Commit appcast
-        run: |
+          echo "package_sparkle: release ${TAG} uploaded"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/appcast.xml docs/appcast-x86_64.xml packaging/macos/appcast.xml packaging/macos/appcast-x86_64.xml
           if git diff --cached --quiet; then
             echo "package_sparkle: appcast unchanged"
           else
+            git stash push -u -- docs/appcast.xml docs/appcast-x86_64.xml packaging/macos/appcast.xml packaging/macos/appcast-x86_64.xml
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+            git stash pop
+            git add docs/appcast.xml docs/appcast-x86_64.xml packaging/macos/appcast.xml packaging/macos/appcast-x86_64.xml
             git commit -m "Publish Sparkle appcast for ${VERSION}"
             git push origin HEAD:main
             echo "package_sparkle: appcast pushed to main"

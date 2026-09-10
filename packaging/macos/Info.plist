@@ -23,9 +23,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.1</string>
+	<string>1.2.2</string>
 	<key>CFBundleVersion</key>
-	<string>1.2.1</string>
+	<string>1.2.2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -55,6 +55,12 @@
 	  Why:  Desktop auth uses official REST, not the Firebase C++ or JS SDK
 	  Date: 2026-08-25
 	  Related: [AT-0005] Config.cpp, [AT-0016] FirebaseAuthClient.h
+	─────────────────────────────────────────────────────── -->
+	<!-- ─── Ariadne's Thread [AT-0646] ─────────────────────
+	  What: Keep Firebase Web, PostHog project, and API host as public client ids
+	  Why:  Official Identity Toolkit REST and PostHog capture need them in the app. Polar tokens and Firebase Admin stay on the Worker. Refresh token is Keychain-only
+	  Date: 2026-09-09
+	  Related: [AT-0644] app→KeychainStore.cpp, [AT-0005] Config.cpp, Firebase REST identitytoolkit, PostHog project API key
 	─────────────────────────────────────────────────────── -->
 	<!-- ─── Ariadne's Thread [AT-0167] ─────────────────────
 	  What: Point the app at the Worker workers.dev hostname

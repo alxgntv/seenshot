@@ -1,0 +1,8 @@
+SeenShot links Qt 6 as frameworks in Contents/Frameworks.
+
+Qt is used under LGPL-3.0-only (Homebrew qtbase). You may replace those frameworks with another compatible Qt build.
+
+Corresponding Qt source is published by The Qt Company at:
+https://code.qt.io/qt/qtbase.git
+
+The full GNU Lesser General Public License version 3 is in LGPL-3.0.txt in this folder.

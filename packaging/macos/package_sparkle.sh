@@ -22,9 +22,20 @@ if [[ "${SEENSHOT_ARCH}" == "x86_64" && "${QT_PREFIX}" == "$(brew --prefix qtbas
     QT_PREFIX="/usr/local/opt/qtbase"
   fi
 fi
-MACDEPLOYQT="${MACDEPLOYQT:-$(brew --prefix qtbase)/bin/macdeployqt}"
-if [[ ! -x "${MACDEPLOYQT}" ]]; then
-  MACDEPLOYQT="$(brew --prefix qttools)/bin/macdeployqt"
+# ─── Ariadne's Thread [AT-0637] ─────────────────────
+# What: Resolve macdeployqt from the same Qt prefix as this arch
+# Why:  ARM Homebrew qttools on a GHA runner would inject arm64 Qt into the x86_64 bundle
+# Date: 2026-09-06
+# Related: [AT-0120] packaging/macos/package_sparkle.sh, [AT-0421] packaging/macos/package_release.sh
+# ─────────────────────────────────────────────────────
+if [[ -z "${MACDEPLOYQT:-}" ]]; then
+  if [[ -x "${QT_PREFIX}/bin/macdeployqt" ]]; then
+    MACDEPLOYQT="${QT_PREFIX}/bin/macdeployqt"
+  elif [[ "${QT_PREFIX}" == /usr/local/* ]]; then
+    MACDEPLOYQT="/usr/local/opt/qttools/bin/macdeployqt"
+  else
+    MACDEPLOYQT="$(brew --prefix qttools)/bin/macdeployqt"
+  fi
 fi
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 SDKROOT="${SDKROOT:-$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk}"
@@ -54,7 +65,7 @@ plist_version() {
 
 VERSION="${VERSION:-$(plist_version)}"
 [[ -n "${VERSION}" ]] || fail "empty version"
-log "version=${VERSION} arch=${SEENSHOT_ARCH} root=${ROOT} repo=${GITHUB_REPOSITORY}"
+log "version=${VERSION} arch=${SEENSHOT_ARCH} qt=${QT_PREFIX} macdeployqt=${MACDEPLOYQT} root=${ROOT} repo=${GITHUB_REPOSITORY}"
 
 if [[ -z "${SPARKLE_BIN}" ]]; then
   if [[ -x /tmp/sparkle281/bin/sign_update ]]; then
@@ -93,9 +104,9 @@ fi
 [[ -d "${APP}" ]] || fail "app bundle missing ${APP}"
 
 if [[ ! -x "${MACDEPLOYQT}" ]]; then
-  fail "macdeployqt missing"
+  fail "macdeployqt missing path=${MACDEPLOYQT} qt=${QT_PREFIX}"
 fi
-log "macdeployqt"
+log "macdeployqt path=${MACDEPLOYQT} app=${APP}"
 "${MACDEPLOYQT}" "${APP}" -always-overwrite
 # ─── Ariadne's Thread [AT-0139] ─────────────────────
 # What: Replace Sparkle.framework after macdeployqt
@@ -197,24 +208,37 @@ rm -rf "${STAGE}"
 [[ -f "${DMG_PATH}" ]] || fail "dmg missing"
 
 if [[ "${SKIP_NOTARY}" != "1" ]]; then
+  # ─── Ariadne's Thread [AT-0637] ─────────────────────
+  # What: Notarize this arch DMG with App Store Connect API key or Apple ID
+  # Why:  GitHub Actions has no seenshot-notary keychain profile. Each arch submits alone
+  # Date: 2026-09-06
+  # Related: [AT-0120] packaging/macos/package_sparkle.sh, Apple xcrun notarytool submit
+  # ─────────────────────────────────────────────────────
   if [[ -n "${NOTARY_KEY:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER:-}" ]]; then
     KEY_FILE="$(mktemp)"
     printf '%s' "${NOTARY_KEY}" > "${KEY_FILE}"
-    log "notarytool submit api key"
+    log "notarytool submit api key id=${NOTARY_KEY_ID} arch=${SEENSHOT_ARCH} dmg=${DMG_NAME}"
     xcrun notarytool submit "${DMG_PATH}" --key "${KEY_FILE}" --key-id "${NOTARY_KEY_ID}" \
       --issuer "${NOTARY_ISSUER}" --wait
     rm -f "${KEY_FILE}"
+  elif [[ -n "${NOTARY_APPLE_ID:-}" && -n "${NOTARY_PASSWORD:-}" && -n "${NOTARY_TEAM_ID:-}" ]]; then
+    log "notarytool submit apple-id team=${NOTARY_TEAM_ID} arch=${SEENSHOT_ARCH} dmg=${DMG_NAME}"
+    xcrun notarytool submit "${DMG_PATH}" \
+      --apple-id "${NOTARY_APPLE_ID}" \
+      --password "${NOTARY_PASSWORD}" \
+      --team-id "${NOTARY_TEAM_ID}" \
+      --wait
   elif [[ -n "${NOTARY_PROFILE:-}" ]]; then
-    log "notarytool submit profile=${NOTARY_PROFILE}"
+    log "notarytool submit profile=${NOTARY_PROFILE} arch=${SEENSHOT_ARCH} dmg=${DMG_NAME}"
     xcrun notarytool submit "${DMG_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
   else
-    fail "notary credentials missing. Set NOTARY_KEY+NOTARY_KEY_ID+NOTARY_ISSUER or NOTARY_PROFILE, or SKIP_NOTARY=1"
+    fail "notary credentials missing. Set NOTARY_KEY+NOTARY_KEY_ID+NOTARY_ISSUER or NOTARY_APPLE_ID+NOTARY_PASSWORD+NOTARY_TEAM_ID or NOTARY_PROFILE, or SKIP_NOTARY=1"
   fi
-  log "stapler staple dmg"
+  log "stapler staple dmg arch=${SEENSHOT_ARCH} dmg=${DMG_NAME}"
   xcrun stapler staple "${DMG_PATH}"
-  log "dmg stapled"
+  log "dmg stapled arch=${SEENSHOT_ARCH} dmg=${DMG_NAME}"
 else
-  log "skip notary"
+  log "skip notary arch=${SEENSHOT_ARCH}"
 fi
 
 LENGTH="$(stat -f%z "${DMG_PATH}")"

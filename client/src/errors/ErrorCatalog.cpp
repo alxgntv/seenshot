@@ -9,11 +9,11 @@
 // Date: 2026-08-25
 // Related: [AT-0001] ErrorCatalog.h
 // ─────────────────────────────────────────────────────
-// ─── Ariadne's Thread [AT-0171] ─────────────────────
-// What: Drop Keychain wording from KEYCHAIN_UNAVAILABLE
-// Why:  Session is QSettings; UI must not mention Keychain
-// Date: 2026-08-26
-// Related: [AT-0171] KeychainStore.cpp
+// ─── Ariadne's Thread [AT-0644] ─────────────────────
+// What: Keep KEYCHAIN_UNAVAILABLE as a generic sign-in save error
+// Why:  Refresh token is in Keychain again, UI still must not name Keychain
+// Date: 2026-09-09
+// Related: [AT-0644] KeychainStore.cpp
 // ─────────────────────────────────────────────────────
 // ─── Ariadne's Thread [AT-0182] ─────────────────────
 // What: Explain Screen Recording switch is per signed copy

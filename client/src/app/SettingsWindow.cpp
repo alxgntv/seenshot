@@ -8,8 +8,12 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -19,8 +23,51 @@
 #include <QPushButton>
 #include <QShowEvent>
 #include <QSizePolicy>
+#include <QTextBrowser>
+#include <QtMath>
 #include <QUrl>
 #include <QVBoxLayout>
+
+namespace {
+
+bool isMemberPlan(const QString &plan)
+{
+    return plan == QLatin1String("pro") || plan == QLatin1String("grace");
+}
+
+// ─── Ariadne's Thread [AT-0643] ─────────────────────
+// What: Format quota bytes as 10 MB or 1 GB from /v1/quota limitBytes
+// Why:  Settings always printed 10 MB, so Pro after redeem looked over cap
+// Date: 2026-09-09
+// Related: [AT-0642] CloudClient.cpp:fetchQuota, [AT-0279] backend→quota.ts:quotaLimitBytes
+// ─────────────────────────────────────────────────────
+QString formatQuotaBytes(int bytes)
+{
+    const qint64 gbUnit = 1024LL * 1024LL * 1024LL;
+    const qint64 mbUnit = 1024LL * 1024LL;
+    if (bytes >= gbUnit) {
+        const double gb = static_cast<double>(bytes) / static_cast<double>(gbUnit);
+        if (qAbs(gb - 1.0) < 0.005) {
+            return QStringLiteral("1 GB");
+        }
+        return QStringLiteral("%1 GB").arg(gb, 0, 'f', 2);
+    }
+    const double mb = static_cast<double>(bytes) / static_cast<double>(mbUnit);
+    if (qAbs(mb - 10.0) < 0.005) {
+        return QStringLiteral("10 MB");
+    }
+    return QStringLiteral("%1 MB").arg(mb, 0, 'f', 2);
+}
+
+int fallbackQuotaLimit(const QString &plan)
+{
+    if (isMemberPlan(plan)) {
+        return 1024 * 1024 * 1024;
+    }
+    return 10 * 1024 * 1024;
+}
+
+} // namespace
 
 // ─── Ariadne's Thread [AT-0085] ─────────────────────
 // What: Settings Capture always; Account is signed-out or signed-in
@@ -136,6 +183,16 @@ SettingsWindow::SettingsWindow(AuthSession *auth, CloudClient *cloud, QWidget *p
     connect(m_auth, &AuthSession::sessionChanged, this, &SettingsWindow::onSessionChanged);
 
     layout->addStretch(1);
+    // ─── Ariadne's Thread [AT-0645] ─────────────────────
+    // What: Open bundled Credits.html from Settings
+    // Why:  Sparkle, Qt, and posthog-cpp notices must ship in the app
+    // Date: 2026-09-09
+    // Related: [AT-0645] packaging/macos/Credits.html, https://sparkle-project.org/documentation/
+    // ─────────────────────────────────────────────────────
+    m_licensesBtn = new QPushButton(QStringLiteral("Licence"), this);
+    m_licensesBtn->setMinimumHeight(32);
+    connect(m_licensesBtn, &QPushButton::clicked, this, &SettingsWindow::openLicenses);
+    layout->addWidget(m_licensesBtn);
     // ─── Ariadne's Thread [AT-0122] ─────────────────────
     // What: Show the running app version on Settings
     // Why:  User must see which build is installed
@@ -229,6 +286,15 @@ void SettingsWindow::applyHotkeys()
     emit hotkeysChanged();
 }
 
+void SettingsWindow::applyUpgradeVisibility(const QString &plan)
+{
+    const bool member = isMemberPlan(plan);
+    if (m_proBtn) {
+        m_proBtn->setVisible(!member);
+    }
+    qInfo() << "SettingsWindow: upgrade visible=" << !member << " plan=" << plan;
+}
+
 void SettingsWindow::updateAccountUi()
 {
     const bool in = m_auth->hasSession();
@@ -236,14 +302,19 @@ void SettingsWindow::updateAccountUi()
     m_signedInBox->setVisible(in);
     if (!in) {
         m_signInBtn->setEnabled(!m_websiteSignInBusy);
+        applyUpgradeVisibility(QString());
         adjustSize();
         qInfo() << "SettingsWindow: show signed-out account busy=" << m_websiteSignInBusy;
         return;
     }
     QString text = QStringLiteral("Signed in as %1").arg(m_auth->email().isEmpty() ? m_auth->uid() : m_auth->email());
     m_profile->setText(text);
+    const QString cachedPlan =
+        (LocalStore::planUid() == m_auth->uid()) ? LocalStore::plan() : QString();
+    applyUpgradeVisibility(cachedPlan);
     adjustSize();
-    qInfo() << "SettingsWindow: show signed-in account emailChars=" << m_auth->email().size();
+    qInfo() << "SettingsWindow: show signed-in account emailChars=" << m_auth->email().size()
+            << " cachedPlan=" << cachedPlan;
 }
 
 void SettingsWindow::onSessionChanged()
@@ -261,24 +332,68 @@ void SettingsWindow::refreshQuota()
         return;
     }
     int used = 0;
+    int limitBytes = 0;
     QString plan;
     QString error;
-    if (!m_cloud->fetchQuota(&used, &plan, &error)) {
+    if (!m_cloud->fetchQuota(&used, &plan, &limitBytes, &error)) {
         qWarning() << "SettingsWindow: quota failed" << error;
         if (error == QLatin1String("PRO_GRACE_ENDED")) {
+            LocalStore::setPlan(m_auth->uid(), QStringLiteral("free"));
+            applyUpgradeVisibility(QStringLiteral("free"));
             QMessageBox::information(this, QStringLiteral("SeenShot"), ErrorCatalog::message(error));
         }
         return;
     }
+    LocalStore::setPlan(m_auth->uid(), plan);
+    if (limitBytes <= 0) {
+        limitBytes = fallbackQuotaLimit(plan);
+        qWarning() << "SettingsWindow: quota missing limitBytes, fallback plan=" << plan
+                   << " limit=" << limitBytes;
+    }
+    applyUpgradeVisibility(plan);
+    qInfo() << "SettingsWindow: cached plan=" << plan << " used=" << used << " limit=" << limitBytes
+            << " member=" << isMemberPlan(plan);
     const QString who = m_auth->email().isEmpty() ? m_auth->uid() : m_auth->email();
-    m_profile->setText(QStringLiteral("Signed in as %1\nPlan: %2. Cloud used: %3 / 10 MB.")
-                           .arg(who, plan, QString::number(used / 1024.0 / 1024.0, 'f', 2)));
+    m_profile->setText(QStringLiteral("Signed in as %1\nPlan: %2. Cloud used: %3 / %4.")
+                           .arg(who, plan, formatQuotaBytes(used), formatQuotaBytes(limitBytes)));
+    adjustSize();
 }
 
 void SettingsWindow::showAuthError(const QString &code)
 {
     const QString text = ErrorCatalog::message(code);
     QMessageBox::warning(this, QStringLiteral("SeenShot"), text);
+}
+
+void SettingsWindow::openLicenses()
+{
+    const QString path = QDir(QCoreApplication::applicationDirPath())
+                             .filePath(QStringLiteral("../Resources/Credits.html"));
+    QFile file(path);
+    qInfo() << "SettingsWindow: open licenses path=" << path << " exists=" << file.exists()
+            << " size=" << file.size();
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "SettingsWindow: licenses missing path=" << path;
+        QMessageBox::warning(this, QStringLiteral("SeenShot"),
+                             QStringLiteral("Could not open open-source licenses."));
+        return;
+    }
+    const QByteArray html = file.readAll();
+    auto *dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setAttribute(Qt::WA_QuitOnClose, false);
+    dialog->setWindowTitle(QStringLiteral("Open-source licenses"));
+    dialog->resize(560, 480);
+    auto *box = new QVBoxLayout(dialog);
+    auto *view = new QTextBrowser(dialog);
+    view->setOpenExternalLinks(true);
+    view->setHtml(QString::fromUtf8(html));
+    box->addWidget(view);
+    auto *closeBtn = new QPushButton(QStringLiteral("Close"), dialog);
+    connect(closeBtn, &QPushButton::clicked, dialog, &QDialog::accept);
+    box->addWidget(closeBtn);
+    qInfo() << "SettingsWindow: licenses dialog htmlChars=" << html.size();
+    dialog->exec();
 }
 
 void SettingsWindow::openSignIn()

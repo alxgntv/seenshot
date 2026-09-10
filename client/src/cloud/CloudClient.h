@@ -33,7 +33,13 @@ public:
                           QString *errorCode, const CloudUploadProgress &progress = {});
     bool publishExisting(const QString &shotId, QString *publicUrl, QString *errorCode);
     bool createCheckoutUrl(QString *url, QString *errorCode);
-    bool fetchQuota(int *usedBytes, QString *plan, QString *errorCode);
+    // ─── Ariadne's Thread [AT-0642] ─────────────────────
+    // What: Return /v1/quota limitBytes with usedBytes and plan
+    // Why:  Settings hardcoded 10 MB after redeem even when plan is pro
+    // Date: 2026-09-09
+    // Related: [AT-0643] SettingsWindow.cpp:refreshQuota, [AT-0279] backend→quota.ts:quotaLimitBytes
+    // ─────────────────────────────────────────────────────
+    bool fetchQuota(int *usedBytes, QString *plan, int *limitBytes, QString *errorCode);
     bool exportAccount(const QString &zipPath, QString *errorCode);
     bool deleteAccount(QString *errorCode);
 
