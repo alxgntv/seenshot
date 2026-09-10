@@ -36,6 +36,8 @@ private slots:
 private:
     void updateAccountUi();
     void applyUpgradeVisibility(const QString &plan);
+    void applyFetchedQuota(bool ok, int used, const QString &plan, int limitBytes, const QString &error,
+                           const QString &uid);
     void loadHotkeys();
     void loadLaunchAtLogin();
     void showAuthError(const QString &code);

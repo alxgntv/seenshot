@@ -34,6 +34,13 @@ public:
     bool startWebsiteSignIn(QString *errorCode);
     bool completeWebsiteCallback(const QUrl &url, QString *errorCode);
     bool ensureIdToken(QString *idToken, QString *errorCode);
+    // ─── Ariadne's Thread [AT-0655] ─────────────────────
+    // What: Expose unexpired in-memory ID token without network
+    // Why:  Settings quota must not call blocking Firebase refresh
+    // Date: 2026-09-10
+    // Related: [AT-0654] CloudClient.cpp:fetchQuota
+    // ─────────────────────────────────────────────────────
+    bool cachedIdToken(QString *idToken) const;
     void signOut();
 
 signals:

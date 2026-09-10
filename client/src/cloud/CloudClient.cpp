@@ -249,35 +249,103 @@ bool CloudClient::createCheckoutUrl(QString *url, QString *errorCode)
     return !url->isEmpty();
 }
 
-// ─── Ariadne's Thread [AT-0642] ─────────────────────
-// What: Parse usedBytes, plan, and limitBytes from GET /v1/quota
-// Why:  Settings must show Member 1 GB after redeem, not a hardcoded 10 MB cap
-// Date: 2026-09-09
-// Related: [AT-0643] SettingsWindow.cpp:refreshQuota, [AT-0279] backend→quota.ts:quota
+// ─── Ariadne's Thread [AT-0654] ─────────────────────
+// What: GET /v1/quota on QNetworkReply::finished, never QEventLoop
+// Why:  Settings and annotate must stay usable offline while the Worker is slow or down
+// Date: 2026-09-10
+// Related: [AT-0642] CloudClient.cpp:fetchQuota, [AT-0655] AuthSession.cpp:cachedIdToken,
+//          [AT-0643] SettingsWindow.cpp:refreshQuota, [AT-0279] backend→quota.ts:quota
 // ─────────────────────────────────────────────────────
-bool CloudClient::fetchQuota(int *usedBytes, QString *plan, int *limitBytes, QString *errorCode)
+void CloudClient::fetchQuota(const CloudQuotaCallback &done)
 {
-    QByteArray response;
-    if (!authorizedJson(QStringLiteral("GET"), QStringLiteral("/v1/quota"), {}, &response, errorCode)) {
-        qWarning() << "CloudClient: quota request failed";
-        return false;
+    ++m_quotaGeneration;
+    const int generation = m_quotaGeneration;
+    if (m_quotaReply) {
+        qInfo() << "CloudClient: abort in-flight quota oldReply gen=" << generation;
+        QNetworkReply *old = m_quotaReply;
+        m_quotaReply = nullptr;
+        old->abort();
+        old->deleteLater();
     }
-    const QJsonObject json = QJsonDocument::fromJson(response).object();
-    const int used = json.value(QStringLiteral("usedBytes")).toInt();
-    const QString nextPlan = json.value(QStringLiteral("plan")).toString();
-    const int limit = json.value(QStringLiteral("limitBytes")).toInt();
-    if (usedBytes) {
-        *usedBytes = used;
+    auto invoke = [done](bool ok, int used, const QString &plan, int limit, const QString &error) {
+        if (done) {
+            done(ok, used, plan, limit, error);
+        }
+    };
+    if (!m_auth || !m_nam) {
+        qWarning() << "CloudClient: quota skip no auth or nam gen=" << generation;
+        invoke(false, 0, QString(), 0, QStringLiteral("OFFLINE_CLOUD_UNAVAILABLE"));
+        return;
     }
-    if (plan) {
-        *plan = nextPlan;
+    QString token;
+    if (!m_auth->cachedIdToken(&token)) {
+        qInfo() << "CloudClient: quota skip, no cached id token gen=" << generation;
+        invoke(false, 0, QString(), 0, QStringLiteral("OFFLINE_CLOUD_UNAVAILABLE"));
+        return;
     }
-    if (limitBytes) {
-        *limitBytes = limit;
-    }
-    qInfo() << "CloudClient: quota used=" << used << " plan=" << nextPlan << " limit=" << limit
-            << " hasLimit=" << json.contains(QStringLiteral("limitBytes"));
-    return true;
+    QUrl url(Config::apiBaseUrl() + QStringLiteral("/v1/quota"));
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", "Bearer " + token.toUtf8());
+    qInfo() << "CloudClient: GET" << url.toString() << "quota gen=" << generation;
+    QNetworkReply *reply = m_nam->get(request);
+    m_quotaReply = reply;
+    QObject::connect(reply, &QNetworkReply::finished, reply, [this, reply, done, generation]() {
+        if (m_quotaReply == reply) {
+            m_quotaReply = nullptr;
+        }
+        const QByteArray body = reply->readAll();
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QNetworkReply::NetworkError netError = reply->error();
+        reply->deleteLater();
+        auto invokeDone = [done](bool ok, int used, const QString &plan, int limit, const QString &error) {
+            if (done) {
+                done(ok, used, plan, limit, error);
+            }
+        };
+        if (generation != m_quotaGeneration) {
+            qInfo() << "CloudClient: quota superseded gen=" << generation
+                    << " current=" << m_quotaGeneration << " netError=" << static_cast<int>(netError)
+                    << " status=" << status;
+            invokeDone(false, 0, QString(), 0, QStringLiteral("UPLOAD_FAILED"));
+            return;
+        }
+        if (netError == QNetworkReply::OperationCanceledError) {
+            qWarning() << "CloudClient: quota canceled gen=" << generation << " status=" << status;
+            invokeDone(false, 0, QString(), 0, QStringLiteral("UPLOAD_FAILED"));
+            return;
+        }
+        qInfo() << "CloudClient: quota status=" << status << " bytes=" << body.size()
+                << " netError=" << static_cast<int>(netError) << " gen=" << generation;
+        if (status < 200 || status >= 300) {
+            const QJsonObject json = QJsonDocument::fromJson(body).object();
+            const QString code = json.value(QStringLiteral("code")).toString();
+            const QString error = code.isEmpty() ? QStringLiteral("UPLOAD_FAILED") : code;
+            qWarning() << "CloudClient: quota error body" << QString::fromUtf8(body).left(400);
+            invokeDone(false, 0, QString(), 0, error);
+            return;
+        }
+        const QJsonObject json = QJsonDocument::fromJson(body).object();
+        const int used = json.value(QStringLiteral("usedBytes")).toInt();
+        const QString nextPlan = json.value(QStringLiteral("plan")).toString();
+        const int limit = json.value(QStringLiteral("limitBytes")).toInt();
+        qInfo() << "CloudClient: quota used=" << used << " plan=" << nextPlan << " limit=" << limit
+                << " hasLimit=" << json.contains(QStringLiteral("limitBytes")) << " gen=" << generation;
+        invokeDone(true, used, nextPlan, limit, QString());
+    });
+    QTimer::singleShot(30000, reply, [this, reply, generation]() {
+        if (generation != m_quotaGeneration) {
+            qInfo() << "CloudClient: quota timeout ignored stale gen=" << generation
+                    << " current=" << m_quotaGeneration;
+            return;
+        }
+        if (!reply || reply->isFinished()) {
+            qInfo() << "CloudClient: quota timeout skipped already finished gen=" << generation;
+            return;
+        }
+        qWarning() << "CloudClient: quota timeout abort gen=" << generation;
+        reply->abort();
+    });
 }
 
 bool CloudClient::exportAccount(const QString &zipPath, QString *errorCode)

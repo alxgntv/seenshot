@@ -1226,9 +1226,9 @@ void AnnotateWindow::showEvent(QShowEvent *event)
     }
     layoutToolsBar();
     layoutWatermarkBar();
+    layoutUpdateCard();
     fitShotToWindow();
     layoutPhotoOverlay();
-    layoutUpdateCard();
     layoutPhotoChoice();
     updateWatermarkBar();
     QTimer::singleShot(0, this, &AnnotateWindow::refreshWatermarkPlan);
@@ -1247,9 +1247,9 @@ void AnnotateWindow::resizeEvent(QResizeEvent *event)
     QMainWindow::resizeEvent(event);
     layoutToolsBar();
     layoutWatermarkBar();
+    layoutUpdateCard();
     fitShotToWindow();
     layoutPhotoOverlay();
-    layoutUpdateCard();
     layoutPhotoChoice();
     qInfo() << "AnnotateWindow: resizeEvent" << event->size();
 }
@@ -1587,12 +1587,22 @@ void AnnotateWindow::fitShotToWindow()
                 << "barVisible=" << (m_toolsBar && m_toolsBar->isVisible());
     }
     int bottomMargin = 0;
-    if (!hasProPlan() && m_watermarkBar && m_watermarkBar->isVisible()) {
-        const QPoint barTop(0, m_watermarkBar->geometry().top());
+    int barTopY = -1;
+    if (m_watermarkBar && m_watermarkBar->isVisible()) {
+        barTopY = m_watermarkBar->geometry().top();
+    }
+    if (m_updateCard && m_updateCard->isVisible()) {
+        const int updateTop = m_updateCard->geometry().top();
+        barTopY = (barTopY < 0) ? updateTop : qMin(barTopY, updateTop);
+    }
+    if (barTopY >= 0) {
+        const QPoint barTop(0, barTopY);
         const QPoint inView = m_view->mapFrom(this, barTop);
         bottomMargin = qMax(0, m_view->viewport()->height() - inView.y() + 12);
-        qInfo() << "AnnotateWindow: fit watermark bar inset bottomMargin=" << bottomMargin
-                << "barGeo=" << m_watermarkBar->geometry() << "inViewY=" << inView.y();
+        qInfo() << "AnnotateWindow: fit bottom bars inset bottomMargin=" << bottomMargin
+                << "watermarkGeo=" << (m_watermarkBar ? m_watermarkBar->geometry() : QRect())
+                << "updateGeo=" << (m_updateCard ? m_updateCard->geometry() : QRect())
+                << "barTopY=" << barTopY << "inViewY=" << inView.y();
     }
     auto *editorView = static_cast<EditorView *>(m_view);
     if (!editorView->fitViewportMargins().isNull()) {
@@ -2318,18 +2328,28 @@ void AnnotateWindow::refreshWatermarkPlan()
     m_watermarkPlanBusy = true;
     QPointer<AnnotateWindow> self = this;
     const QString uid = m_auth->uid();
-    int used = 0;
-    int limitBytes = 0;
-    QString plan;
-    QString error;
     qInfo() << "AnnotateWindow: watermark plan fetch start uidChars=" << uid.size();
-    const bool ok = m_cloud->fetchQuota(&used, &plan, &limitBytes, &error);
-    qInfo() << "AnnotateWindow: watermark plan fetch used=" << used << " limit=" << limitBytes
-            << " plan=" << plan << " ok=" << ok;
-    if (!self) {
-        qWarning() << "AnnotateWindow: watermark plan fetch window gone ok=" << ok;
-        return;
-    }
+    m_cloud->fetchQuota([self, uid](bool ok, int used, const QString &plan, int limitBytes, const QString &error) {
+        if (!self) {
+            qWarning() << "AnnotateWindow: watermark plan fetch window gone ok=" << ok
+                       << " error=" << error;
+            return;
+        }
+        qInfo() << "AnnotateWindow: watermark plan fetch used=" << used << " limit=" << limitBytes
+                << " plan=" << plan << " ok=" << ok << " error=" << error;
+        self->applyWatermarkQuotaResult(ok, used, plan, limitBytes, error, uid);
+    });
+}
+
+// ─── Ariadne's Thread [AT-0657] ─────────────────────
+// What: Apply quota to the watermark after the cached plan is already on screen
+// Why:  Annotate must not freeze until GET /v1/quota returns
+// Date: 2026-09-10
+// Related: [AT-0654] CloudClient.cpp:fetchQuota, [AT-0422] AnnotateWindow.cpp:updateWatermarkBar
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::applyWatermarkQuotaResult(bool ok, int used, const QString &plan, int limitBytes,
+                                              const QString &error, const QString &uid)
+{
     m_watermarkPlanBusy = false;
     if (!m_auth->hasSession() || m_auth->uid() != uid) {
         m_plan.clear();
@@ -2352,7 +2372,7 @@ void AnnotateWindow::refreshWatermarkPlan()
             qWarning() << "AnnotateWindow: watermark plan grace ended, cached free";
         } else {
             qWarning() << "AnnotateWindow: watermark plan fetch failed keep cache code=" << error
-                       << "plan=" << m_plan << "used=" << used;
+                       << "plan=" << m_plan << "used=" << used << "limit=" << limitBytes;
         }
         if (m_view && m_view->viewport()) {
             m_view->viewport()->update();
@@ -2389,23 +2409,43 @@ int AnnotateWindow::editorChromeBottomInset() const
 
 void AnnotateWindow::layoutWatermarkBar()
 {
-    if (!m_watermarkBar || !m_watermarkBar->isVisible()) {
-        return;
-    }
-    m_watermarkBar->adjustSize();
-    const QSize hint = m_watermarkBar->sizeHint();
+    layoutBottomBars();
+}
+
+// ─── Ariadne's Thread [AT-0652] ─────────────────────
+// What: Stack the update bar and Remove Watermark bar from the canvas bottom
+// Why:  The update offer was centered on the shot. It must sit in the same bottom HUD as watermark, one bar above the other when both show
+// Date: 2026-09-10
+// Related: [AT-0422] AnnotateWindow.cpp:layoutWatermarkBar, [AT-0093] AnnotateWindow.cpp:ensureUpdateCard
+// ─────────────────────────────────────────────────────
+void AnnotateWindow::layoutBottomBars()
+{
     const int margin = 12;
     const int bottomChrome = editorChromeBottomInset();
     const QRect canvas = editorCanvasRect();
-    const int maxW = qMax(1, canvas.width() - margin * 2);
-    const int w = qMin(hint.width(), maxW);
-    const int h = hint.height();
-    const int x = canvas.x() + qMax(margin, (canvas.width() - w) / 2);
-    const int y = qMax(canvas.y() + margin, canvas.bottom() - h - margin);
-    m_watermarkBar->setGeometry(x, y, w, h);
-    m_watermarkBar->raise();
-    qInfo() << "AnnotateWindow: watermark bar geo=" << m_watermarkBar->geometry() << "hint=" << hint
-            << "canvas=" << canvas << "window=" << size() << "bottomChrome=" << bottomChrome;
+    int yBottom = canvas.bottom() - margin;
+    auto placeBar = [&](QWidget *bar, const QString &name) {
+        if (!bar || !bar->isVisible()) {
+            qInfo() << "AnnotateWindow: layoutBottomBars skip name=" << name
+                    << "null=" << (bar == nullptr);
+            return;
+        }
+        bar->adjustSize();
+        const QSize hint = bar->sizeHint();
+        const int maxW = qMax(1, canvas.width() - margin * 2);
+        const int w = qMin(hint.width(), maxW);
+        const int h = hint.height();
+        const int x = canvas.x() + qMax(margin, (canvas.width() - w) / 2);
+        const int y = qMax(canvas.y() + margin, yBottom - h);
+        bar->setGeometry(x, y, w, h);
+        bar->raise();
+        yBottom = y - margin;
+        qInfo() << "AnnotateWindow: layoutBottomBars name=" << name << "geo=" << bar->geometry()
+                << "hint=" << hint << "canvas=" << canvas << "window=" << size()
+                << "yBottom=" << yBottom << "bottomChrome=" << bottomChrome;
+    };
+    placeBar(m_watermarkBar, QStringLiteral("watermark"));
+    placeBar(m_updateCard, QStringLiteral("update"));
 }
 
 void AnnotateWindow::updateWatermarkBar()
@@ -2421,10 +2461,10 @@ void AnnotateWindow::updateWatermarkBar()
     }
     if (show) {
         m_watermarkBar->show();
-        layoutWatermarkBar();
     } else {
         m_watermarkBar->hide();
     }
+    layoutWatermarkBar();
     fitShotToWindow();
     qInfo() << "AnnotateWindow: updateWatermarkBar show=" << show << "plan=" << m_plan
             << "signedIn=" << signedIn << "pro=" << hasProPlan();
@@ -2969,9 +3009,9 @@ void AnnotateWindow::relayoutEditorChrome()
 {
     layoutToolsBar();
     layoutWatermarkBar();
+    layoutUpdateCard();
     fitShotToWindow();
     layoutPhotoOverlay();
-    layoutUpdateCard();
     layoutPhotoChoice();
     qInfo() << "AnnotateWindow: relayout editor chrome view=" << (m_view ? m_view->size() : QSize());
 }
@@ -5924,18 +5964,30 @@ void AnnotateWindow::ensureUpdateCard()
         return;
     }
     m_updateCard = new QFrame(this);
-    m_updateCard->setFrameShape(QFrame::StyledPanel);
-    m_updateCard->setAutoFillBackground(true);
-    m_updateCard->setFixedWidth(320);
+    m_updateCard->setObjectName(QStringLiteral("UpdateBar"));
+    m_updateCard->setAttribute(Qt::WA_StyledBackground, true);
+    m_updateCard->setStyleSheet(QStringLiteral(
+        "#UpdateBar { background: #2c2c2e; border: 1px solid #6e6e73; border-radius: 14px; }"));
+    auto *updateShadow = new QGraphicsDropShadowEffect(m_updateCard);
+    updateShadow->setBlurRadius(22);
+    updateShadow->setOffset(0, 4);
+    updateShadow->setColor(QColor(0, 0, 0, 150));
+    m_updateCard->setGraphicsEffect(updateShadow);
     auto *layout = new QVBoxLayout(m_updateCard);
-    layout->setContentsMargins(16, 14, 16, 14);
-    layout->setSpacing(10);
-    m_updateTitle = new QLabel(QStringLiteral("A new update is available."), m_updateCard);
-    m_updateTitle->setWordWrap(true);
-    m_updateTitle->setAlignment(Qt::AlignCenter);
-    m_updateButton = new QPushButton(QStringLiteral("Update"), m_updateCard);
-    m_updateButton->setDefault(true);
-    m_updateButton->setAutoDefault(false);
+    layout->setContentsMargins(10, 8, 10, 8);
+    layout->setSpacing(8);
+    auto *row = new QWidget(m_updateCard);
+    auto *rowLay = new QHBoxLayout(row);
+    rowLay->setContentsMargins(0, 0, 0, 0);
+    rowLay->setSpacing(10);
+    m_updateTitle = new QLabel(QStringLiteral("A new update is available."), row);
+    m_updateTitle->setWordWrap(false);
+    m_updateTitle->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+    m_updateTitle->setStyleSheet(QStringLiteral("color: #f5f5f7;"));
+    m_updateButton = makeNativeToolbarButton(QStringLiteral("Update"), true);
+    m_updateButton->setParent(row);
+    rowLay->addWidget(m_updateTitle);
+    rowLay->addWidget(m_updateButton);
     m_updateBar = new QProgressBar(m_updateCard);
     m_updateBar->setRange(0, 1000);
     m_updateBar->setValue(0);
@@ -5943,8 +5995,8 @@ void AnnotateWindow::ensureUpdateCard()
     m_updateStatus = new QLabel(m_updateCard);
     m_updateStatus->setAlignment(Qt::AlignCenter);
     m_updateStatus->setWordWrap(true);
-    layout->addWidget(m_updateTitle);
-    layout->addWidget(m_updateButton);
+    m_updateStatus->setStyleSheet(QStringLiteral("color: #f5f5f7;"));
+    layout->addWidget(row);
     layout->addWidget(m_updateBar);
     layout->addWidget(m_updateStatus);
     m_updateBar->hide();
@@ -5954,21 +6006,12 @@ void AnnotateWindow::ensureUpdateCard()
         qInfo() << "AnnotateWindow: Update clicked";
         emit updateRequested();
     });
-    qInfo() << "AnnotateWindow: update card created";
+    qInfo() << "AnnotateWindow: update bar created";
 }
 
 void AnnotateWindow::layoutUpdateCard()
 {
-    if (!m_updateCard || !m_updateCard->isVisible() || !m_view) {
-        return;
-    }
-    m_updateCard->adjustSize();
-    const QRect view = m_view->geometry();
-    const int x = view.x() + (view.width() - m_updateCard->width()) / 2;
-    const int y = view.y() + (view.height() - m_updateCard->height()) / 2;
-    m_updateCard->move(x, y);
-    m_updateCard->raise();
-    qInfo() << "AnnotateWindow: update card pos=" << m_updateCard->pos() << " view=" << view;
+    layoutBottomBars();
 }
 
 void AnnotateWindow::showUpdateOffer()
@@ -5980,7 +6023,10 @@ void AnnotateWindow::showUpdateOffer()
     m_updateStatus->hide();
     m_updateCard->show();
     layoutUpdateCard();
-    qInfo() << "AnnotateWindow: update offer shown";
+    fitShotToWindow();
+    qInfo() << "AnnotateWindow: update offer shown watermarkVisible="
+            << (m_watermarkBar && m_watermarkBar->isVisible())
+            << "updateGeo=" << m_updateCard->geometry();
 }
 
 void AnnotateWindow::showUpdateProgress(qint64 received, qint64 expected, const QString &status)
@@ -5999,8 +6045,9 @@ void AnnotateWindow::showUpdateProgress(qint64 received, qint64 expected, const 
     }
     m_updateCard->show();
     layoutUpdateCard();
+    fitShotToWindow();
     qInfo() << "AnnotateWindow: update progress received=" << received << " expected=" << expected
-            << " status=" << status;
+            << " status=" << status << "geo=" << m_updateCard->geometry();
 }
 
 void AnnotateWindow::showUpdateExtracting(double progress)
@@ -6014,7 +6061,8 @@ void AnnotateWindow::showUpdateExtracting(double progress)
     m_updateBar->setValue(static_cast<int>(qBound(0.0, progress, 1.0) * 1000.0));
     m_updateCard->show();
     layoutUpdateCard();
-    qInfo() << "AnnotateWindow: update extracting=" << progress;
+    fitShotToWindow();
+    qInfo() << "AnnotateWindow: update extracting=" << progress << "geo=" << m_updateCard->geometry();
 }
 
 void AnnotateWindow::showUpdateInstalling()
@@ -6027,7 +6075,8 @@ void AnnotateWindow::showUpdateInstalling()
     m_updateBar->setRange(0, 0);
     m_updateCard->show();
     layoutUpdateCard();
-    qInfo() << "AnnotateWindow: update installing";
+    fitShotToWindow();
+    qInfo() << "AnnotateWindow: update installing geo=" << m_updateCard->geometry();
 }
 
 void AnnotateWindow::resetUpdateOffer()
@@ -6042,7 +6091,10 @@ void AnnotateWindow::hideUpdateCard()
         return;
     }
     m_updateCard->hide();
-    qInfo() << "AnnotateWindow: update card hidden";
+    layoutBottomBars();
+    fitShotToWindow();
+    qInfo() << "AnnotateWindow: update card hidden watermarkVisible="
+            << (m_watermarkBar && m_watermarkBar->isVisible());
 }
 
 void AnnotateWindow::showUpdateError(const QString &code)

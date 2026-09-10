@@ -370,6 +370,33 @@ bool AuthSession::ensureIdToken(QString *idToken, QString *errorCode)
     return true;
 }
 
+// ─── Ariadne's Thread [AT-0655] ─────────────────────
+// What: Return the in-memory ID token only when it is still unexpired
+// Why:  Quota GET must not block the UI on Firebase refresh or QEventLoop
+// Date: 2026-09-10
+// Related: [AT-0654] CloudClient.cpp:fetchQuota, [AT-0019] AuthSession.cpp:ensureIdToken
+// ─────────────────────────────────────────────────────
+bool AuthSession::cachedIdToken(QString *idToken) const
+{
+    QMutexLocker lock(&m_mutex);
+    if (m_tokens.idToken.isEmpty()) {
+        qInfo() << "AuthSession: cachedIdToken empty";
+        return false;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now >= m_tokens.expiresAtMs) {
+        qInfo() << "AuthSession: cachedIdToken expired expiresAtMs=" << m_tokens.expiresAtMs
+                << " now=" << now;
+        return false;
+    }
+    if (idToken) {
+        *idToken = m_tokens.idToken;
+    }
+    qInfo() << "AuthSession: cachedIdToken ok uid=" << m_tokens.uid
+            << " expiresAtMs=" << m_tokens.expiresAtMs;
+    return true;
+}
+
 bool AuthSession::persistPendingPkce(const QString &verifier, const QString &state, QString *errorCode)
 {
     const QByteArray created = QByteArray::number(QDateTime::currentMSecsSinceEpoch());

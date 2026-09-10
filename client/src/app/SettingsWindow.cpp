@@ -20,9 +20,11 @@
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QShowEvent>
 #include <QSizePolicy>
+#include <QTimer>
 #include <QTextBrowser>
 #include <QtMath>
 #include <QUrl>
@@ -219,12 +221,16 @@ void SettingsWindow::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     loadHotkeys();
     loadLaunchAtLogin();
-    refreshQuota();
     m_fullScreenHotkey->clearFocus();
     m_pathHotkey->clearFocus();
     const QWidget *focus = QApplication::focusWidget();
     qInfo() << "SettingsWindow: showEvent hotkeyFocus cleared focus="
             << (focus ? QLatin1String(focus->metaObject()->className()) : QLatin1String("none"));
+    qInfo() << "SettingsWindow: queue refreshQuota after paint";
+    QTimer::singleShot(0, this, [this]() {
+        qInfo() << "SettingsWindow: deferred refreshQuota visible=" << isVisible();
+        refreshQuota();
+    });
 }
 
 void SettingsWindow::loadHotkeys()
@@ -327,15 +333,42 @@ void SettingsWindow::onSessionChanged()
 void SettingsWindow::refreshQuota()
 {
     updateAccountUi();
-    if (!m_auth->hasSession() || !m_auth->isOnline()) {
-        qInfo() << "SettingsWindow: skip quota offline or signed out";
+    if (!m_auth->hasSession() || !m_auth->isOnline() || !m_cloud) {
+        qInfo() << "SettingsWindow: skip quota offline or signed out hasSession="
+                << m_auth->hasSession() << " online=" << m_auth->isOnline()
+                << " cloud=" << (m_cloud != nullptr);
         return;
     }
-    int used = 0;
-    int limitBytes = 0;
-    QString plan;
-    QString error;
-    if (!m_cloud->fetchQuota(&used, &plan, &limitBytes, &error)) {
+    const QString uid = m_auth->uid();
+    QPointer<SettingsWindow> self = this;
+    qInfo() << "SettingsWindow: quota fetch start uidChars=" << uid.size();
+    m_cloud->fetchQuota([self, uid](bool ok, int used, const QString &plan, int limitBytes, const QString &error) {
+        if (!self) {
+            qWarning() << "SettingsWindow: quota reply after close ok=" << ok << " error=" << error;
+            return;
+        }
+        qInfo() << "SettingsWindow: quota reply ok=" << ok << " used=" << used << " plan=" << plan
+                << " limit=" << limitBytes << " error=" << error;
+        self->applyFetchedQuota(ok, used, plan, limitBytes, error, uid);
+    });
+}
+
+// ─── Ariadne's Thread [AT-0656] ─────────────────────
+// What: Apply /v1/quota on the callback after Settings already showed the cached account
+// Why:  Opening Settings must not wait for the Worker, including when the Mac is offline
+// Date: 2026-09-10
+// Related: [AT-0654] CloudClient.cpp:fetchQuota, [AT-0643] SettingsWindow.cpp:refreshQuota
+// ─────────────────────────────────────────────────────
+void SettingsWindow::applyFetchedQuota(bool ok, int used, const QString &plan, int limitBytes, const QString &error,
+                                       const QString &uid)
+{
+    if (!m_auth->hasSession() || m_auth->uid() != uid) {
+        qInfo() << "SettingsWindow: quota discarded session changed signedIn=" << m_auth->hasSession()
+                << " uidMatch=" << (m_auth->uid() == uid);
+        updateAccountUi();
+        return;
+    }
+    if (!ok) {
         qWarning() << "SettingsWindow: quota failed" << error;
         if (error == QLatin1String("PRO_GRACE_ENDED")) {
             LocalStore::setPlan(m_auth->uid(), QStringLiteral("free"));
@@ -345,17 +378,18 @@ void SettingsWindow::refreshQuota()
         return;
     }
     LocalStore::setPlan(m_auth->uid(), plan);
-    if (limitBytes <= 0) {
-        limitBytes = fallbackQuotaLimit(plan);
+    int shownLimit = limitBytes;
+    if (shownLimit <= 0) {
+        shownLimit = fallbackQuotaLimit(plan);
         qWarning() << "SettingsWindow: quota missing limitBytes, fallback plan=" << plan
-                   << " limit=" << limitBytes;
+                   << " limit=" << shownLimit;
     }
     applyUpgradeVisibility(plan);
-    qInfo() << "SettingsWindow: cached plan=" << plan << " used=" << used << " limit=" << limitBytes
+    qInfo() << "SettingsWindow: cached plan=" << plan << " used=" << used << " limit=" << shownLimit
             << " member=" << isMemberPlan(plan);
     const QString who = m_auth->email().isEmpty() ? m_auth->uid() : m_auth->email();
     m_profile->setText(QStringLiteral("Signed in as %1\nPlan: %2. Cloud used: %3 / %4.")
-                           .arg(who, plan, formatQuotaBytes(used), formatQuotaBytes(limitBytes)));
+                           .arg(who, plan, formatQuotaBytes(used), formatQuotaBytes(shownLimit)));
     adjustSize();
 }
 

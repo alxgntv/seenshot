@@ -8,6 +8,7 @@
 
 class AuthSession;
 class QNetworkAccessManager;
+class QNetworkReply;
 
 struct CloudConfirmResult {
     QString shotId;
@@ -17,6 +18,8 @@ struct CloudConfirmResult {
 };
 
 using CloudUploadProgress = std::function<void(qint64 sent, qint64 total)>;
+using CloudQuotaCallback =
+    std::function<void(bool ok, int usedBytes, QString plan, int limitBytes, QString errorCode)>;
 
 // ─── Ariadne's Thread [AT-0020] ─────────────────────
 // What: API client for presign, confirm, publish, account
@@ -33,13 +36,14 @@ public:
                           QString *errorCode, const CloudUploadProgress &progress = {});
     bool publishExisting(const QString &shotId, QString *publicUrl, QString *errorCode);
     bool createCheckoutUrl(QString *url, QString *errorCode);
-    // ─── Ariadne's Thread [AT-0642] ─────────────────────
-    // What: Return /v1/quota limitBytes with usedBytes and plan
-    // Why:  Settings hardcoded 10 MB after redeem even when plan is pro
-    // Date: 2026-09-09
-    // Related: [AT-0643] SettingsWindow.cpp:refreshQuota, [AT-0279] backend→quota.ts:quotaLimitBytes
+    // ─── Ariadne's Thread [AT-0654] ─────────────────────
+    // What: GET /v1/quota on QNetworkReply::finished, never QEventLoop
+    // Why:  Settings and annotate cannot freeze until the Worker answers
+    // Date: 2026-09-10
+    // Related: [AT-0642] CloudClient.cpp:fetchQuota, [AT-0655] AuthSession.cpp:cachedIdToken,
+    //          [AT-0643] SettingsWindow.cpp:refreshQuota, [AT-0657] AnnotateWindow.cpp:applyWatermarkQuotaResult
     // ─────────────────────────────────────────────────────
-    bool fetchQuota(int *usedBytes, QString *plan, int *limitBytes, QString *errorCode);
+    void fetchQuota(const CloudQuotaCallback &done);
     bool exportAccount(const QString &zipPath, QString *errorCode);
     bool deleteAccount(QString *errorCode);
 
@@ -53,4 +57,6 @@ private:
 
     AuthSession *m_auth = nullptr;
     QNetworkAccessManager *m_nam = nullptr;
+    QNetworkReply *m_quotaReply = nullptr;
+    int m_quotaGeneration = 0;
 };

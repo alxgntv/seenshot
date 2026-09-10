@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-# ─── Ariadne's Thread [AT-0651] ─────────────────────
-# What: Bundle version 1.2.2
-# Why:  Sparkle must see a newer CFBundleVersion than the installed 1.2.1
+# ─── Ariadne's Thread [AT-0658] ─────────────────────
+# What: Bundle version 1.2.3
+# Why:  Sparkle must see a newer CFBundleVersion than the installed 1.2.2
 # Date: 2026-09-10
-# Related: [AT-0651] packaging/macos/Info.plist, [AT-0651] client/src/main.cpp, [AT-0637] .github/workflows/release.yml
+# Related: [AT-0658] packaging/macos/Info.plist, [AT-0658] client/src/main.cpp, [AT-0654] CloudClient.cpp:fetchQuota
 # ─────────────────────────────────────────────────────
-project(SeenShot VERSION 1.2.2 LANGUAGES CXX OBJCXX)
+project(SeenShot VERSION 1.2.3 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -698,7 +698,29 @@ void Application::showAnnotate(const QImage &image)
 
 void Application::openSettings()
 {
-    qInfo() << "Application: openSettings";
+    qInfo() << "Application: openSettings queued=" << m_settingsOpenQueued
+            << " hasWindow=" << (m_settings != nullptr);
+    if (m_settingsOpenQueued) {
+        qInfo() << "Application: openSettings already queued, skip";
+        return;
+    }
+    m_settingsOpenQueued = true;
+    // ─── Ariadne's Thread [AT-0653] ─────────────────────
+    // What: Present Settings after the tray QMenu tracking runloop exits
+    // Why:  showEvent used to call fetchQuota QEventLoop while NSStatusItem still tracked, which freezes WindowServer
+    // Date: 2026-09-10
+    // Related: [AT-0085] SettingsWindow.cpp:showEvent, Qt QSystemTrayIcon QMenu, Apple NSStatusItem
+    // ─────────────────────────────────────────────────────
+    QTimer::singleShot(0, this, [this]() {
+        m_settingsOpenQueued = false;
+        presentSettingsWindow();
+    });
+}
+
+void Application::presentSettingsWindow()
+{
+    qInfo() << "Application: presentSettingsWindow hasWindow=" << (m_settings != nullptr)
+            << " editorOpen=" << (m_editor != nullptr);
     if (!m_settings) {
         m_settings = new SettingsWindow(m_auth, m_cloud);
         m_settings->setAttribute(Qt::WA_DeleteOnClose);
@@ -706,9 +728,24 @@ void Application::openSettings()
         qInfo() << "Application: settings WA_QuitOnClose="
                 << m_settings->testAttribute(Qt::WA_QuitOnClose);
         connect(m_settings, &SettingsWindow::hotkeysChanged, this, &Application::applyHotkeys);
+        connect(m_settings, &QObject::destroyed, this, [this]() {
+            qInfo() << "Application: settings destroyed editorOpen=" << (m_editor != nullptr);
+            if (m_editor) {
+                qInfo() << "Application: keep Dock Regular for annotate";
+                return;
+            }
+            const bool dockOff = MacPermissions::setDockVisible(false);
+            qInfo() << "Application: settings dockOff=" << dockOff;
+        });
     }
+    const bool dockOn = MacPermissions::setDockVisible(true);
+    qInfo() << "Application: settings dockOn=" << dockOn;
+    MacPermissions::activateApp();
     m_settings->show();
     m_settings->raise();
+    m_settings->activateWindow();
+    qInfo() << "Application: settings shown visible=" << m_settings->isVisible()
+            << " active=" << m_settings->isActiveWindow();
 }
 
 void Application::confirmQuit()

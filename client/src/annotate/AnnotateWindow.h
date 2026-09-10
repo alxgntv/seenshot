@@ -257,6 +257,8 @@ private:
     bool hasBackground() const;
     bool hasProPlan() const;
     void loadCachedPlan();
+    void applyWatermarkQuotaResult(bool ok, int used, const QString &plan, int limitBytes, const QString &error,
+                                   const QString &uid);
     void paintWatermark(QPainter *painter, const QRectF &target) const;
     qreal maxTextWidthOnShot(const AnnotateTextItem *item) const;
     void showError(const QString &code);
@@ -266,6 +268,7 @@ private:
     void openProCheckout();
     void updateWatermarkBar();
     void layoutWatermarkBar();
+    void layoutBottomBars();
     int editorChromeBottomInset() const;
     bool ensureOnlineSignedIn(QString *errorCode);
     void setShareBusy(bool busy);

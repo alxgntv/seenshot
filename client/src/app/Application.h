@@ -49,6 +49,7 @@ private:
     void teardownNativeWindows();
     void handleOpenUrl(const QUrl &url);
     void finishLaunch();
+    void presentSettingsWindow();
 
     QNetworkAccessManager *m_nam = nullptr;
     ISecureStore *m_store = nullptr;
@@ -63,4 +64,5 @@ private:
     bool m_capturing = false;
     bool m_requestedScreenRecording = false;
     bool m_ensuringScreenRecording = false;
+    bool m_settingsOpenQueued = false;
 };
